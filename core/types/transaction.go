@@ -54,7 +54,7 @@ const (
 
 // Transaction is an Ethereum transaction.
 type Transaction struct {
-	seq   int
+	seq   int       // A temporary value used to determine the transaction processing order
 	inner TxData    // Consensus contents of a transaction
 	time  time.Time // Time first seen locally (spam avoidance)
 
