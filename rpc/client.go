@@ -160,6 +160,27 @@ func (op *requestOp) wait(ctx context.Context, c *Client) ([]*jsonrpcMessage, er
 	}
 }
 
+type requestOpForSbb struct {
+	*requestOp
+	resp chan []*JSONRPCResponse // the response goes here
+}
+
+func (op *requestOpForSbb) wait(ctx context.Context, c *Client) ([]*jsonrpcMessage, error) {
+	select {
+	case <-ctx.Done():
+		// Send the timeout to dispatch so it can remove the request IDs.
+		if !c.isHTTP {
+			select {
+			case c.reqTimeout <- op:
+			case <-c.closing:
+			}
+		}
+		return nil, ctx.Err()
+	case resp := <-op.resp:
+		return resp, op.err
+	}
+}
+
 // Dial creates a new client for the given URL.
 //
 // The currently supported URL schemes are "http", "https", "ws" and "wss". If rawurl is a
@@ -336,6 +357,47 @@ func (c *Client) Call(result interface{}, method string, args ...interface{}) er
 // The result must be a pointer so that package json can unmarshal into it. You
 // can also pass nil, in which case the result is ignored.
 func (c *Client) CallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error {
+	if result != nil && reflect.TypeOf(result).Kind() != reflect.Ptr {
+		return fmt.Errorf("call result parameter must be pointer or nil interface: %v", result)
+	}
+	msg, err := c.newMessage(method, args...)
+	if err != nil {
+		return err
+	}
+	op := &requestOp{
+		ids:  []json.RawMessage{msg.ID},
+		resp: make(chan []*jsonrpcMessage, 1),
+	}
+
+	if c.isHTTP {
+		err = c.sendHTTP(ctx, op, msg)
+	} else {
+		err = c.send(ctx, op, msg)
+	}
+	if err != nil {
+		return err
+	}
+
+	// dispatch has accepted the request and will close the channel when it quits.
+	batchresp, err := op.wait(ctx, c)
+	if err != nil {
+		return err
+	}
+	resp := batchresp[0]
+	switch {
+	case resp.Error != nil:
+		return resp.Error
+	case len(resp.Result) == 0:
+		return ErrNoResult
+	default:
+		if result == nil {
+			return nil
+		}
+		return json.Unmarshal(resp.Result, result)
+	}
+}
+
+func (c *Client) CallContextForSbb(ctx context.Context, newMessageFn func(), result interface{}, method string, args ...interface{}) error {
 	if result != nil && reflect.TypeOf(result).Kind() != reflect.Ptr {
 		return fmt.Errorf("call result parameter must be pointer or nil interface: %v", result)
 	}

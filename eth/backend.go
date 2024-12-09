@@ -20,6 +20,7 @@ package eth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -79,6 +80,8 @@ type Ethereum struct {
 
 	seqRPCService        *rpc.Client
 	historicalRPCService *rpc.Client
+	// SBB (Secure Block Building)
+	sbbService *SbbService
 
 	interopRPC *interop.InteropClient
 
@@ -317,6 +320,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			return nil, err
 		}
 		eth.seqRPCService = client
+	} else {
+		sbbService, err := NewSbbService()
+		if err != nil {
+			return nil, err
+		}
+		eth.sbbService = sbbService
 	}
 
 	if config.RollupHistoricalRPC != "" {
@@ -418,6 +427,7 @@ func (s *Ethereum) Synced() bool                       { return s.handler.synced
 func (s *Ethereum) SetSynced()                         { s.handler.enableSyncedFeatures() }
 func (s *Ethereum) ArchiveMode() bool                  { return s.config.NoPruning }
 func (s *Ethereum) BloomIndexer() *core.ChainIndexer   { return s.bloomIndexer }
+func (s *Ethereum) SbbService() *SbbService            { return s.sbbService }
 
 // Protocols returns all the currently configured
 // network protocols to start.
@@ -442,6 +452,40 @@ func (s *Ethereum) Start() error {
 
 	// Start the networking layer
 	s.handler.Start(s.p2pServer.MaxPeers)
+
+	s.sbbService.Start(s.submitRawTxs)
+	return nil
+}
+
+func (s *Ethereum) submitRawTxs(txs types.Transactions) error {
+	for _, tx := range txs {
+		if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.APIBackend.RPCTxFeeCap()); err != nil {
+			return err
+		}
+		if !s.APIBackend.UnprotectedAllowed() && !tx.Protected() {
+			// Ensure only eip155 signed transactions are submitted if EIP155Required is set.
+			return errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
+		}
+		if s.APIBackend.ChainConfig().IsOptimism() && tx.Type() == types.BlobTxType {
+			return types.ErrTxTypeNotSupported
+		}
+	}
+	if s.APIBackend.disableTxPool {
+		return nil
+	}
+	return s.txPool.Add(txs, true, false)[0]
+}
+
+func checkTxFee(gasPrice *big.Int, gas uint64, cap float64) error {
+	// Short circuit if there is no cap for transaction fee at all.
+	if cap == 0 {
+		return nil
+	}
+	feeEth := new(big.Float).Quo(new(big.Float).SetInt(new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gas))), new(big.Float).SetInt(big.NewInt(params.Ether)))
+	feeFloat, _ := feeEth.Float64()
+	if feeFloat > cap {
+		return fmt.Errorf("tx fee (%.2f ether) exceeds the configured cap (%.2f ether)", feeFloat, cap)
+	}
 	return nil
 }
 
