@@ -184,6 +184,11 @@ type Config struct {
 
 	InteropMessageRPC       string `toml:",omitempty"`
 	InteropMempoolFiltering bool   `toml:",omitempty"`
+
+	Platform        string `toml:",omitempty"`
+	RollupId        string `toml:",omitempty"`
+	ExecutorAddress string `toml:",omitempty"`
+	L1Url           string `toml:",omitempty"`
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

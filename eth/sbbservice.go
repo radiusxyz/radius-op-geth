@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"strings"
 	"time"
 
@@ -22,11 +24,40 @@ const (
 	GetRawTransactionList Method = "get_raw_transaction_list"
 )
 
-type SbbService struct {
-	sbbClient *sbbclient.SbbClient
+type BlockchainService interface {
+	SubmitRawTxs(txs types.Transactions) error
+	BlockChain() *core.BlockChain
+}
 
+type SbbService struct {
+	blockchainService  BlockchainService
+	sbbClient          *sbbclient.SbbClient
+	ethClient          *ethclient.Client
+	platform           string
+	rollupId           string
+	executorAddress    string
+	l1Url              string
 	finishedTxsSetting bool
 	finishedNewPayload bool
+}
+
+func NewSbbService(eth *Ethereum) (*SbbService, error) {
+	sbbClient := sbbclient.New()
+	ethClient, err := ethclient.Dial("")
+	if err != nil {
+		return nil, err
+	}
+	return &SbbService{
+		blockchainService:  eth,
+		sbbClient:          sbbClient,
+		ethClient:          ethClient,
+		platform:           eth.config.Platform,
+		rollupId:           eth.config.RollupId,
+		executorAddress:    eth.config.ExecutorAddress,
+		l1Url:              eth.config.L1Url,
+		finishedTxsSetting: false,
+		finishedNewPayload: false,
+	}, nil
 }
 
 func (s *SbbService) FinishedTxsSetting() bool {
@@ -53,17 +84,8 @@ func (s *SbbService) CompleteTxsSetting() {
 	s.finishedTxsSetting = true
 }
 
-func NewSbbService() (*SbbService, error) {
-	client := sbbclient.New()
-	return &SbbService{
-		sbbClient:          client,
-		finishedTxsSetting: false,
-		finishedNewPayload: false,
-	}, nil
-}
-
-func (s *SbbService) Start(submitRawTxFn func(txs types.Transactions) error) {
-	s.eventLoop(submitRawTxFn)
+func (s *SbbService) Start() {
+	s.eventLoop()
 }
 
 func makeBody(method Method, params interface{}) ([]byte, error) {
@@ -77,9 +99,11 @@ func makeBody(method Method, params interface{}) ([]byte, error) {
 
 func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
 	params := GetRawTransactionListParams{
-		RollupId:          "",
-		RollupBlockHeight: "",
+		RollupId:          s.rollupId,
+		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
 	}
+	log.Info("getRawTransactionList RollupId: ", params.RollupId, "RollupBlockHeight: ", params.RollupBlockHeight)
+
 	body, err := makeBody(GetRawTransactionList, params)
 	if err != nil {
 		log.Error("failed to make body while finalizing the block in getRawTransactionList method")
@@ -106,14 +130,18 @@ func (s *SbbService) finalizeBlock(url string, errCh chan error) {
 		return
 	}
 
-	params := FinalizeBlockParams{
-		Platform:            "",
-		RollupId:            "",
-		BlockCreatorAddress: "",
-		ExecutorAddress:     "",
-		PlatformBlockHeight: "",
-		RollupBlockHeight:   "",
+	message := FinalizeBlockMessageParams{
+		Platform:            s.platform,
+		RollupId:            s.rollupId,
+		ExecutorAddress:     s.executorAddress,
+		PlatformBlockHeight: "", // l1 넣어야됨
+		RollupBlockHeight:   s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2,
 	}
+	params := FinalizeBlockParams{
+		Message:   message,
+		Signature: "",
+	}
+	log.Info("finalizeBlock RollupId: ", message.RollupId, "RollupBlockHeight: ", message.RollupBlockHeight)
 	body, err := makeBody(FinalizeBlock, params)
 	if err != nil {
 		log.Error("failed to make body while finalizing the block in finalizeBlock method")
@@ -132,7 +160,7 @@ func (s *SbbService) finalizeBlock(url string, errCh chan error) {
 	s.ResetFinishedNewPayload()
 }
 
-func (s *SbbService) eventLoop(submitRawTxFn func(types.Transactions) error) ethereum.Subscription {
+func (s *SbbService) eventLoop() ethereum.Subscription {
 	return event.NewSubscription(func(quit <-chan struct{}) error {
 		eventsCtx, eventsCancel := context.WithCancel(context.Background())
 		defer eventsCancel()
@@ -157,7 +185,7 @@ func (s *SbbService) eventLoop(submitRawTxFn func(types.Transactions) error) eth
 		for {
 			select {
 			case <-ticker.C:
-				go s.processTransactions(eventsCtx, "", submitRawTxFn, errCh)
+				go s.processTransactions(eventsCtx, "", errCh)
 				go s.finalizeBlock("", errCh)
 			case <-eventsCtx.Done():
 				return nil
@@ -169,7 +197,7 @@ func (s *SbbService) eventLoop(submitRawTxFn func(types.Transactions) error) eth
 	})
 }
 
-func (s *SbbService) processTransactions(ctx context.Context, url string, submitRawTxFn func(types.Transactions) error, errCh chan error) {
+func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
 	if s.finishedTxsSetting {
 		errCh <- errors.New("transactions are not ready to be processed yet")
 		return
@@ -184,7 +212,7 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, submit
 		errCh <- err
 		return
 	}
-	if err = submitRawTxFn(txs); err != nil {
+	if err = s.blockchainService.SubmitRawTxs(txs); err != nil {
 		log.Error("failed to add the transactions to the transaction pool")
 		errCh <- err
 		return
@@ -236,18 +264,22 @@ func newJsonRpcRequest(method Method, params interface{}) JSONRPCRequest {
 	}
 }
 
-type FinalizeBlockParams struct {
+type FinalizeBlockMessageParams struct {
 	Platform            string `json:"platform"`
 	RollupId            string `json:"rollup_id"`
-	BlockCreatorAddress string `json:"block_creator_address"`
 	ExecutorAddress     string `json:"executor_address"`
 	PlatformBlockHeight string `json:"platform_block_height"`
-	RollupBlockHeight   string `json:"rollup_block_height"`
+	RollupBlockHeight   uint64 `json:"rollup_block_height"`
+}
+
+type FinalizeBlockParams struct {
+	Message   FinalizeBlockMessageParams `json:"message"`
+	Signature string                     `json:"signature"`
 }
 
 type GetRawTransactionListParams struct {
 	RollupId          string `json:"rollup_id"`
-	RollupBlockHeight string `json:"rollup_block_height"`
+	RollupBlockHeight uint64 `json:"rollup_block_height"`
 }
 
 type GetRawTransactionListResponse struct {

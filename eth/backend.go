@@ -321,7 +321,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 		eth.seqRPCService = client
 	} else {
-		sbbService, err := NewSbbService()
+		sbbService, err := NewSbbService(eth)
 		if err != nil {
 			return nil, err
 		}
@@ -453,11 +453,11 @@ func (s *Ethereum) Start() error {
 	// Start the networking layer
 	s.handler.Start(s.p2pServer.MaxPeers)
 
-	s.sbbService.Start(s.submitRawTxs)
+	s.sbbService.Start()
 	return nil
 }
 
-func (s *Ethereum) submitRawTxs(txs types.Transactions) error {
+func (s *Ethereum) SubmitRawTxs(txs types.Transactions) error {
 	for _, tx := range txs {
 		if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.APIBackend.RPCTxFeeCap()); err != nil {
 			return err

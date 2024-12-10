@@ -1,0 +1,5 @@
+[Eth]
+Platform = "ethereum"
+RollupId = "rollup_id"
+ExecutorAddress = "0xDee97c45cd2F6e15BaDD434Eefe68b71744ebB5e"
+L1Url = "https://ethereum-holesky-rpc.publicnode.com"
