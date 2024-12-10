@@ -65,8 +65,10 @@ func (sc *SbbClient) Send(ctx context.Context, url string, body interface{}, res
 		return err
 	}
 
-	if err = json.Unmarshal(jsonRpcResponse.Result, result); err != nil {
-		return err
+	if jsonRpcResponse.Result != nil {
+		if err = json.Unmarshal(jsonRpcResponse.Result, result); err != nil {
+			return err
+		}
 	}
 	return nil
 }

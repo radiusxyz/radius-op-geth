@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/sbbclient"
-	"strings"
-	"time"
 )
 
 type Method string
@@ -20,7 +23,8 @@ const (
 )
 
 type SbbService struct {
-	sbbClient          *sbbclient.SbbClient
+	sbbClient *sbbclient.SbbClient
+
 	finishedTxsSetting bool
 	finishedNewPayload bool
 }
@@ -71,18 +75,20 @@ func makeBody(method Method, params interface{}) ([]byte, error) {
 	return body, nil
 }
 
-func (s *SbbService) GetRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
+func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
 	params := GetRawTransactionListParams{
 		RollupId:          "",
 		RollupBlockHeight: "",
 	}
 	body, err := makeBody(GetRawTransactionList, params)
 	if err != nil {
+		log.Error("failed to make body while finalizing the block in getRawTransactionList method")
 		return nil, err
 	}
 
 	res := &GetRawTransactionListResponse{}
 	if err = s.sbbClient.Send(ctx, url, body, res); err != nil {
+		log.Error("failed to send get_transaction_list request to SBB")
 		return nil, err
 	}
 
@@ -94,7 +100,12 @@ func (s *SbbService) GetRawTransactionList(ctx context.Context, url string) (typ
 	return txs, nil
 }
 
-func (s *SbbService) FinalizeBlock(url string) error {
+func (s *SbbService) finalizeBlock(url string, errCh chan error) {
+	if !s.finishedNewPayload {
+		errCh <- errors.New("transactions are not ready to be processed yet")
+		return
+	}
+
 	params := FinalizeBlockParams{
 		Platform:            "",
 		RollupId:            "",
@@ -105,21 +116,20 @@ func (s *SbbService) FinalizeBlock(url string) error {
 	}
 	body, err := makeBody(FinalizeBlock, params)
 	if err != nil {
-		return err
+		log.Error("failed to make body while finalizing the block in finalizeBlock method")
+		errCh <- err
+		return
 	}
-
+	//0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// TODO: response 타입 알아야함
 	if err = s.sbbClient.Send(ctx, url, body, nil); err != nil {
-		return err
+		log.Error("failed to send finalize_block request to SBB")
+		errCh <- err
+		return
 	}
-	return nil
-}
-
-func (s *SbbService) finalizeBlockLoop() {
-
+	s.ResetFinishedNewPayload()
 }
 
 func (s *SbbService) eventLoop(submitRawTxFn func(types.Transactions) error) ethereum.Subscription {
@@ -136,42 +146,50 @@ func (s *SbbService) eventLoop(submitRawTxFn func(types.Transactions) error) eth
 			}
 		}()
 
-		txsSettingTimer := time.NewTimer(0)
-		var txsSettingCh <-chan time.Time
-		planAction := func() {
-			delay := s.planNextAction()
-			txsSettingCh = txsSettingTimer.C
-			if len(txsSettingCh) > 0 { // empty if not already drained before resetting
-				<-txsSettingCh
-			}
-			txsSettingTimer.Reset(delay)
-		}
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 
-		go s.finalizeBlockLoop()
+		errCh := make(chan error, 1)
+
+		<-ticker.C
+		s.finalizeBlock("", errCh)
 
 		for {
-			planAction()
 			select {
-			case <-txsSettingCh:
-				reqCtx, reqCancel := context.WithTimeout(eventsCtx, 5*time.Second)
-				defer reqCancel()
-				txs, err := s.GetRawTransactionList(reqCtx, "")
-				if err != nil {
-					return err
-				}
-				if err = submitRawTxFn(txs); err != nil {
-					return err
-				}
+			case <-ticker.C:
+				go s.processTransactions(eventsCtx, "", submitRawTxFn, errCh)
+				go s.finalizeBlock("", errCh)
 			case <-eventsCtx.Done():
 				return nil
+			case err, _ := <-errCh:
+				log.Error(err.Error())
+				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
 			}
 		}
 	})
 }
 
-func (s *SbbService) planNextAction() time.Duration {
+func (s *SbbService) processTransactions(ctx context.Context, url string, submitRawTxFn func(types.Transactions) error, errCh chan error) {
+	if s.finishedTxsSetting {
+		errCh <- errors.New("transactions are not ready to be processed yet")
+		return
+	}
 
-	return 5
+	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer reqCancel()
+	txs, err := s.getRawTransactionList(reqCtx, url)
+	if err != nil {
+		// Error Wrapping 적용해보기.
+		log.Error("failed to fetch transactions from SBB")
+		errCh <- err
+		return
+	}
+	if err = submitRawTxFn(txs); err != nil {
+		log.Error("failed to add the transactions to the transaction pool")
+		errCh <- err
+		return
+	}
+	s.CompleteTxsSetting()
 }
 
 func hexToTx(str string) (*types.Transaction, error) {
@@ -182,7 +200,7 @@ func hexToTx(str string) (*types.Transaction, error) {
 		return nil, err
 	}
 
-	if err := tx.UnmarshalBinary(b); err != nil {
+	if err = tx.UnmarshalBinary(b); err != nil {
 		return nil, err
 	}
 

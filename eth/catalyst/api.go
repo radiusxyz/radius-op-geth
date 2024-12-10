@@ -559,7 +559,7 @@ func (api *ConsensusAPI) GetPayloadV4(payloadID engine.PayloadID) (*engine.Execu
 
 func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*engine.ExecutionPayloadEnvelope, error) {
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
-	if !api.eth.SbbService().FinishedTxsSetting() {
+	if !api.eth.SbbService().FinishedTxsSetting() || api.eth.SbbService().FinishedNewPayload() {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return nil, engine.GenericServerError
 	}
@@ -846,7 +846,7 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	// Hence, we use a lock here, to be sure that the previous call has finished before we
 	// check whether we already have the block locally.
 
-	if !api.eth.SbbService().FinishedTxsSetting() {
+	if !api.eth.SbbService().FinishedTxsSetting() || api.eth.SbbService().FinishedNewPayload() {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return api.invalid(engine.GenericServerError, nil), nil
 	}
