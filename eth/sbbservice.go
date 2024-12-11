@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"math/big"
 	"strings"
 	"time"
 
@@ -20,25 +23,29 @@ import (
 type Method string
 
 const (
-	FinalizeBlock         Method = "finalize_block"
-	GetRawTransactionList Method = "get_raw_transaction_list"
+	FinalizeBlock          Method = "finalize_block"
+	GetRawTransactionList  Method = "get_raw_transaction_list"
+	GetSequencerRpcUrlList Method = "get_sequencer_rpc_url_list"
 )
 
 type BlockchainService interface {
-	SubmitRawTxs(txs types.Transactions) error
+	SubmitRawTransactions(txs types.Transactions) error
 	BlockChain() *core.BlockChain
 }
 
 type SbbService struct {
-	blockchainService  BlockchainService
-	sbbClient          *sbbclient.SbbClient
-	ethClient          *ethclient.Client
-	platform           string
-	rollupId           string
-	executorAddress    string
-	l1Url              string
-	finishedTxsSetting bool
-	finishedNewPayload bool
+	blockchainService       BlockchainService
+	sbbClient               *sbbclient.SbbClient
+	ethClient               *ethclient.Client
+	platform                string
+	rollupId                string
+	executorAddress         string
+	l1Url                   string
+	livenessContractAddress string
+	clusterId               string
+	seedNodeUrl             string
+	finishedTxsSetting      bool
+	finishedNewPayload      bool
 }
 
 func NewSbbService(eth *Ethereum) (*SbbService, error) {
@@ -48,15 +55,18 @@ func NewSbbService(eth *Ethereum) (*SbbService, error) {
 		return nil, err
 	}
 	return &SbbService{
-		blockchainService:  eth,
-		sbbClient:          sbbClient,
-		ethClient:          ethClient,
-		platform:           eth.config.Platform,
-		rollupId:           eth.config.RollupId,
-		executorAddress:    eth.config.ExecutorAddress,
-		l1Url:              eth.config.L1Url,
-		finishedTxsSetting: false,
-		finishedNewPayload: false,
+		blockchainService:       eth,
+		sbbClient:               sbbClient,
+		ethClient:               ethClient,
+		platform:                eth.config.Platform,
+		rollupId:                eth.config.RollupId,
+		executorAddress:         eth.config.ExecutorAddress,
+		l1Url:                   eth.config.L1Url,
+		livenessContractAddress: eth.config.LivenessContractAddress,
+		clusterId:               eth.config.ClusterId,
+		seedNodeUrl:             eth.config.SeedNodeUrl,
+		finishedTxsSetting:      false,
+		finishedNewPayload:      false,
 	}, nil
 }
 
@@ -98,7 +108,7 @@ func makeBody(method Method, params interface{}) ([]byte, error) {
 }
 
 func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
-	params := GetRawTransactionListParams{
+	params := GetRawTransactionsParams{
 		RollupId:          s.rollupId,
 		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
 	}
@@ -110,32 +120,111 @@ func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (typ
 		return nil, err
 	}
 
-	res := &GetRawTransactionListResponse{}
+	res := &GetRawTransactionsResponse{}
 	if err = s.sbbClient.Send(ctx, url, body, res); err != nil {
 		log.Error("failed to send get_transaction_list request to SBB")
 		return nil, err
 	}
 
 	var txs []*types.Transaction
-	for _, hexString := range res.RawTransactionList {
+	for _, hexString := range res.RawTransactions {
 		tx, _ := hexToTx(hexString)
 		txs = append(txs, tx)
 	}
 	return txs, nil
 }
 
-func (s *SbbService) finalizeBlock(url string, errCh chan error) {
+func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
+	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer reqCancel()
+
+	l1HeadNum, err := s.ethClient.BlockNumber(reqCtx)
+	if err != nil {
+		return nil, err
+	}
+	return &l1HeadNum, nil
+}
+
+func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
+	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer reqCancel()
+
+	contractABI, err := abi.JSON(strings.NewReader(abiString))
+	if err != nil {
+		return nil, err
+	}
+
+	METHOD := "getSequencerList"
+	contractAddress := common.HexToAddress(s.livenessContractAddress)
+	data, err := contractABI.Pack(METHOD, s.clusterId)
+	if err != nil {
+		return nil, err
+	}
+
+	query := ethereum.CallMsg{
+		To:   &contractAddress,
+		Data: data,
+	}
+	result, err := s.ethClient.CallContract(reqCtx, query, big.NewInt(int64(l1HeadNum)))
+	if err != nil {
+		return nil, err
+	}
+
+	var sequencerList []common.Address
+	err = contractABI.UnpackIntoInterface(&sequencerList, METHOD, result)
+	if err != nil {
+		return nil, err
+	}
+
+	var addresses []string
+	for _, addr := range sequencerList {
+		if addr != common.HexToAddress("0x0000000000000000000000000000000000000000") {
+			addresses = append(addresses, addr.Hex())
+		}
+	}
+	return addresses, nil
+}
+
+func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, address []string) ([]string, error) {
+	params := GetSequencerRpcUrlsParams{
+		SequencerAddresses: address,
+	}
+
+	body, err := makeBody(GetSequencerRpcUrlList, params)
+	if err != nil {
+		log.Error("failed to make body while fetching the sequencer rpc urls")
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	res := &GetSequencerRpcUrlsResponse{}
+	if err = s.sbbClient.Send(ctx, s.seedNodeUrl, body, res); err != nil {
+		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node")
+		return nil, err
+	}
+	var urls []string
+	for _, url := range res.SequencerRrcUrls {
+		urls = append(urls, url[1])
+
+	}
+	return urls, nil
+}
+
+func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan error) {
 	if !s.finishedNewPayload {
 		errCh <- errors.New("transactions are not ready to be processed yet")
 		return
 	}
 
+	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
 	message := FinalizeBlockMessageParams{
 		Platform:            s.platform,
 		RollupId:            s.rollupId,
 		ExecutorAddress:     s.executorAddress,
-		PlatformBlockHeight: "", // l1 넣어야됨
-		RollupBlockHeight:   s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2,
+		PlatformBlockHeight: l1HeadNum,
+		RollupBlockHeight:   targetNum,
 	}
 	params := FinalizeBlockParams{
 		Message:   message,
@@ -158,6 +247,8 @@ func (s *SbbService) finalizeBlock(url string, errCh chan error) {
 		return
 	}
 	s.ResetFinishedNewPayload()
+
+	log.Info("Successfully finalized the contents to be included in the block.", "block num", targetNum)
 }
 
 func (s *SbbService) eventLoop() ethereum.Subscription {
@@ -180,21 +271,57 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 		errCh := make(chan error, 1)
 
 		<-ticker.C
-		s.finalizeBlock("", errCh)
+
+		l1HeadNum, err := s.fetchL1HeadNum(eventsCtx)
+		if err != nil {
+			return err
+		}
+		url, err := s.getSequencerUrl(eventsCtx, *l1HeadNum)
+		if err != nil {
+			return err
+		}
+		s.finalizeBlock(*url, *l1HeadNum, errCh)
 
 		for {
 			select {
 			case <-ticker.C:
-				go s.processTransactions(eventsCtx, "", errCh)
-				go s.finalizeBlock("", errCh)
+				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
+				if err != nil {
+					log.Error("failed to fetch l1 head", err.Error())
+					return err
+				}
+				url, err = s.getSequencerUrl(eventsCtx, *l1HeadNum)
+				if err != nil {
+					log.Error("failed to fetch sequencer url", err.Error())
+					return err
+				}
+				go s.processTransactions(eventsCtx, *url, errCh)
+				go s.finalizeBlock(*url, *l1HeadNum, errCh)
 			case <-eventsCtx.Done():
 				return nil
 			case err, _ := <-errCh:
-				log.Error(err.Error())
+				log.Error("something error: ", err.Error())
 				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
 			}
 		}
 	})
+}
+
+func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*string, error) {
+	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
+	if err != nil {
+		return nil, err
+	}
+	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
+	if err != nil {
+		return nil, err
+	}
+	return &urls[s.getSequencerIndex(urls)], nil
+}
+
+func (s *SbbService) getSequencerIndex(urls []string) uint64 {
+	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
+	return blockNum % uint64(len(urls))
 }
 
 func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
@@ -212,12 +339,14 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 		errCh <- err
 		return
 	}
-	if err = s.blockchainService.SubmitRawTxs(txs); err != nil {
+	if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
 		log.Error("failed to add the transactions to the transaction pool")
 		errCh <- err
 		return
 	}
 	s.CompleteTxsSetting()
+
+	log.Info("Transaction processing succeeded", "tx count", len(txs))
 }
 
 func hexToTx(str string) (*types.Transaction, error) {
@@ -231,7 +360,6 @@ func hexToTx(str string) (*types.Transaction, error) {
 	if err = tx.UnmarshalBinary(b); err != nil {
 		return nil, err
 	}
-
 	return tx, nil
 }
 
@@ -247,7 +375,6 @@ func DecodeHex(str string) ([]byte, error) {
 	return hex.DecodeString(str)
 }
 
-// JSON-RPC 요청 형식 정의
 type JSONRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
 	Method  string      `json:"method"`
@@ -264,11 +391,19 @@ func newJsonRpcRequest(method Method, params interface{}) JSONRPCRequest {
 	}
 }
 
+type GetSequencerRpcUrlsParams struct {
+	SequencerAddresses []string `json:"sequencer_address_list"`
+}
+
+type GetSequencerRpcUrlsResponse struct {
+	SequencerRrcUrls [][]string `json:"sequencer_rpc_url_list"`
+}
+
 type FinalizeBlockMessageParams struct {
 	Platform            string `json:"platform"`
 	RollupId            string `json:"rollup_id"`
 	ExecutorAddress     string `json:"executor_address"`
-	PlatformBlockHeight string `json:"platform_block_height"`
+	PlatformBlockHeight uint64 `json:"platform_block_height"`
 	RollupBlockHeight   uint64 `json:"rollup_block_height"`
 }
 
@@ -277,11 +412,33 @@ type FinalizeBlockParams struct {
 	Signature string                     `json:"signature"`
 }
 
-type GetRawTransactionListParams struct {
+type GetRawTransactionsParams struct {
 	RollupId          string `json:"rollup_id"`
 	RollupBlockHeight uint64 `json:"rollup_block_height"`
 }
 
-type GetRawTransactionListResponse struct {
-	RawTransactionList []string `json:"raw_transaction_list"`
+type GetRawTransactionsResponse struct {
+	RawTransactions []string `json:"raw_transaction_list"`
 }
+
+var abiString string = `[
+		{
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "clusterId",
+          "type": "string"
+        }
+      ],
+      "name": "getSequencerList",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+	]`
