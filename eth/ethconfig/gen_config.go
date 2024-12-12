@@ -69,6 +69,13 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RollupHaltOnIncompatibleProtocolVersion   string
 		InteropMessageRPC                         string `toml:",omitempty"`
 		InteropMempoolFiltering                   bool   `toml:",omitempty"`
+		Platform                string
+		RollupId                string
+		ExecutorAddress         string
+		L1Url                   string
+		LivenessContractAddress string
+		ClusterId               string
+		SeedNodeUrl             string
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -123,6 +130,13 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RollupHaltOnIncompatibleProtocolVersion = c.RollupHaltOnIncompatibleProtocolVersion
 	enc.InteropMessageRPC = c.InteropMessageRPC
 	enc.InteropMempoolFiltering = c.InteropMempoolFiltering
+	enc.Platform                = c.Platform
+	enc.RollupId                = c.RollupId
+	enc.ExecutorAddress         = c.ExecutorAddress
+	enc.L1Url                   = c.L1Url
+	enc.LivenessContractAddress = c.LivenessContractAddress
+	enc.ClusterId               = c.ClusterId
+	enc.SeedNodeUrl             = c.SeedNodeUrl
 	return &enc, nil
 }
 
@@ -181,6 +195,13 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RollupHaltOnIncompatibleProtocolVersion   *string
 		InteropMessageRPC                         *string `toml:",omitempty"`
 		InteropMempoolFiltering                   *bool   `toml:",omitempty"`
+		Platform                *string
+		RollupId                *string
+		ExecutorAddress         *string
+		L1Url                   *string
+		LivenessContractAddress *string
+		ClusterId               *string
+		SeedNodeUrl             *string
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -341,6 +362,27 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.InteropMempoolFiltering != nil {
 		c.InteropMempoolFiltering = *dec.InteropMempoolFiltering
+	}
+	if dec.Platform != nil {
+		c.Platform = *dec.Platform
+	}
+	if dec.RollupId != nil {
+		c.RollupId = *dec.RollupId
+	}
+	if dec.ExecutorAddress != nil {
+		c.ExecutorAddress = *dec.ExecutorAddress
+	}
+	if dec.L1Url != nil {
+		c.L1Url = *dec.L1Url
+	}
+	if dec.LivenessContractAddress != nil {
+		c.LivenessContractAddress = *dec.LivenessContractAddress
+	}
+	if dec.ClusterId != nil {
+		c.ClusterId = *dec.ClusterId
+	}
+	if dec.SeedNodeUrl != nil {
+		c.SeedNodeUrl = *dec.SeedNodeUrl
 	}
 	return nil
 }

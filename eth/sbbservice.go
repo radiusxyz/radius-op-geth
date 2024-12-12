@@ -3,8 +3,8 @@ package eth
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -40,17 +40,17 @@ type SbbService struct {
 	platform                string
 	rollupId                string
 	executorAddress         string
-	l1Url                   string
 	livenessContractAddress string
 	clusterId               string
 	seedNodeUrl             string
 	finishedTxsSetting      bool
 	finishedNewPayload      bool
+	noTxPool                bool
 }
 
 func NewSbbService(eth *Ethereum) (*SbbService, error) {
 	sbbClient := sbbclient.New()
-	ethClient, err := ethclient.Dial("")
+	ethClient, err := ethclient.Dial(eth.config.L1Url)
 	if err != nil {
 		return nil, err
 	}
@@ -61,13 +61,21 @@ func NewSbbService(eth *Ethereum) (*SbbService, error) {
 		platform:                eth.config.Platform,
 		rollupId:                eth.config.RollupId,
 		executorAddress:         eth.config.ExecutorAddress,
-		l1Url:                   eth.config.L1Url,
 		livenessContractAddress: eth.config.LivenessContractAddress,
 		clusterId:               eth.config.ClusterId,
 		seedNodeUrl:             eth.config.SeedNodeUrl,
 		finishedTxsSetting:      false,
-		finishedNewPayload:      false,
+		finishedNewPayload:      true,
+		noTxPool:                true,
 	}, nil
+}
+
+func (s *SbbService) NoTxPool() bool {
+	return s.noTxPool
+}
+
+func (s *SbbService) SetNoTxPool(flag bool) {
+	s.noTxPool = flag
 }
 
 func (s *SbbService) FinishedTxsSetting() bool {
@@ -95,33 +103,38 @@ func (s *SbbService) CompleteTxsSetting() {
 }
 
 func (s *SbbService) Start() {
+	log.Info("Starting sbb service...")
 	s.eventLoop()
 }
 
-func makeBody(method Method, params interface{}) ([]byte, error) {
-	jsonRpcRequest := newJsonRpcRequest(method, params)
-	body, err := json.Marshal(jsonRpcRequest)
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
-}
+//func makeBody[T any](method Method, params T) ([]byte, error) {
+//	jsonRpcRequest := newJsonRpcRequest(method, params)
+//	fmt.Println("iiiiiii: ", jsonRpcRequest)
+//	body, err := json.MarshalIndent(jsonRpcRequest, "", "")
+//	fmt.Println("lllllllll: ", string(body))
+//	if err != nil {
+//		return nil, err
+//	}
+//	return body, nil
+//}
 
 func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
 	params := GetRawTransactionsParams{
 		RollupId:          s.rollupId,
 		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
 	}
+
 	log.Info("getRawTransactionList RollupId: ", params.RollupId, "RollupBlockHeight: ", params.RollupBlockHeight)
 
-	body, err := makeBody(GetRawTransactionList, params)
-	if err != nil {
-		log.Error("failed to make body while finalizing the block in getRawTransactionList method")
-		return nil, err
-	}
+	body := newJsonRpcRequest(GetRawTransactionList, params)
+	//body, err := makeBody(GetRawTransactionList, params)
+	//if err != nil {
+	//	log.Error("failed to make body while finalizing the block in getRawTransactionList method")
+	//	return nil, err
+	//}
 
 	res := &GetRawTransactionsResponse{}
-	if err = s.sbbClient.Send(ctx, url, body, res); err != nil {
+	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
 		log.Error("failed to send get_transaction_list request to SBB")
 		return nil, err
 	}
@@ -140,8 +153,10 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 
 	l1HeadNum, err := s.ethClient.BlockNumber(reqCtx)
 	if err != nil {
+		log.Error("failed to fetch l1 head number")
 		return nil, err
 	}
+	log.Info("Successfully fetched the block number from L1.", "num", l1HeadNum)
 	return &l1HeadNum, nil
 }
 
@@ -167,9 +182,9 @@ func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum ui
 	}
 	result, err := s.ethClient.CallContract(reqCtx, query, big.NewInt(int64(l1HeadNum)))
 	if err != nil {
+		log.Error("failed to make a contract call to retrieve the sequencer URL list.")
 		return nil, err
 	}
-
 	var sequencerList []common.Address
 	err = contractABI.UnpackIntoInterface(&sequencerList, METHOD, result)
 	if err != nil {
@@ -185,29 +200,24 @@ func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum ui
 	return addresses, nil
 }
 
-func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, address []string) ([]string, error) {
+func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []string) ([]string, error) {
 	params := GetSequencerRpcUrlsParams{
-		SequencerAddresses: address,
+		SequencerAddresses: addresses,
 	}
 
-	body, err := makeBody(GetSequencerRpcUrlList, params)
-	if err != nil {
-		log.Error("failed to make body while fetching the sequencer rpc urls")
-		return nil, err
-	}
+	body := newJsonRpcRequest(GetSequencerRpcUrlList, params)
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	res := &GetSequencerRpcUrlsResponse{}
-	if err = s.sbbClient.Send(ctx, s.seedNodeUrl, body, res); err != nil {
+	if err := s.sbbClient.Send(ctx, s.seedNodeUrl, body, res); err != nil {
 		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node")
 		return nil, err
 	}
 	var urls []string
-	for _, url := range res.SequencerRrcUrls {
-		urls = append(urls, url[1])
-
+	for _, sequencer := range res.SequencerRrcUrls {
+		urls = append(urls, sequencer.ExternalRpcUrl)
 	}
 	return urls, nil
 }
@@ -230,18 +240,21 @@ func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan erro
 		Message:   message,
 		Signature: "",
 	}
-	log.Info("finalizeBlock RollupId: ", message.RollupId, "RollupBlockHeight: ", message.RollupBlockHeight)
-	body, err := makeBody(FinalizeBlock, params)
-	if err != nil {
-		log.Error("failed to make body while finalizing the block in finalizeBlock method")
-		errCh <- err
-		return
-	}
+	fmt.Println("finalizeBlock RollupId: ", message.RollupId, "RollupBlockHeight: ", message.RollupBlockHeight)
+	//body, err := makeBody(FinalizeBlock, params)
+	//if err != nil {
+	//	log.Error("failed to make body while finalizing the block in finalizeBlock method")
+	//	errCh <- err
+	//	return
+	//}
+
+	body := newJsonRpcRequest(FinalizeBlock, params)
+
 	//0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err = s.sbbClient.Send(ctx, url, body, nil); err != nil {
+	if err := s.sbbClient.Send(ctx, url, body, nil); err != nil {
 		log.Error("failed to send finalize_block request to SBB")
 		errCh <- err
 		return
@@ -265,12 +278,14 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			}
 		}()
 
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
 		errCh := make(chan error, 1)
 
-		<-ticker.C
+		for {
+			if !s.noTxPool {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
 
 		l1HeadNum, err := s.fetchL1HeadNum(eventsCtx)
 		if err != nil {
@@ -282,9 +297,15 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 		}
 		s.finalizeBlock(*url, *l1HeadNum, errCh)
 
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
+				if s.noTxPool {
+					continue
+				}
 				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
 				if err != nil {
 					log.Error("failed to fetch l1 head", err.Error())
@@ -316,12 +337,21 @@ func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*st
 	if err != nil {
 		return nil, err
 	}
-	return &urls[s.getSequencerIndex(urls)], nil
+
+	index, err := s.getSequencerIndex(urls)
+	if err != nil {
+		return nil, err
+	}
+	return &urls[*index], nil
 }
 
-func (s *SbbService) getSequencerIndex(urls []string) uint64 {
+func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
-	return blockNum % uint64(len(urls))
+	if len(urls) < 1 {
+		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
+	}
+	mod := blockNum % uint64(len(urls))
+	return &mod, nil
 }
 
 func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
@@ -375,15 +405,15 @@ func DecodeHex(str string) ([]byte, error) {
 	return hex.DecodeString(str)
 }
 
-type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
+type JSONRPCRequest[T any] struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  T      `json:"params"`
+	ID      int    `json:"id"`
 }
 
-func newJsonRpcRequest(method Method, params interface{}) JSONRPCRequest {
-	return JSONRPCRequest{
+func newJsonRpcRequest[T any](method Method, params T) JSONRPCRequest[T] {
+	return JSONRPCRequest[T]{
 		JSONRPC: "2.0",
 		Method:  string(method),
 		Params:  params,
@@ -395,8 +425,14 @@ type GetSequencerRpcUrlsParams struct {
 	SequencerAddresses []string `json:"sequencer_address_list"`
 }
 
+type SequencerRpcUrl struct {
+	Address        string `json:"address"`
+	ExternalRpcUrl string `json:"external_rpc_url"`
+	ClusterRpcUrl  string `json:"cluster_rpc_url"`
+}
+
 type GetSequencerRpcUrlsResponse struct {
-	SequencerRrcUrls [][]string `json:"sequencer_rpc_url_list"`
+	SequencerRrcUrls []SequencerRpcUrl `json:"sequencer_rpc_url_list"`
 }
 
 type FinalizeBlockMessageParams struct {

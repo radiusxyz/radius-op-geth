@@ -160,27 +160,6 @@ func (op *requestOp) wait(ctx context.Context, c *Client) ([]*jsonrpcMessage, er
 	}
 }
 
-type requestOpForSbb struct {
-	*requestOp
-	resp chan []*JSONRPCResponse // the response goes here
-}
-
-func (op *requestOpForSbb) wait(ctx context.Context, c *Client) ([]*jsonrpcMessage, error) {
-	select {
-	case <-ctx.Done():
-		// Send the timeout to dispatch so it can remove the request IDs.
-		if !c.isHTTP {
-			select {
-			case c.reqTimeout <- op:
-			case <-c.closing:
-			}
-		}
-		return nil, ctx.Err()
-	case resp := <-op.resp:
-		return resp, op.err
-	}
-}
-
 // Dial creates a new client for the given URL.
 //
 // The currently supported URL schemes are "http", "https", "ws" and "wss". If rawurl is a

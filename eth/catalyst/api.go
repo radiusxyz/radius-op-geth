@@ -486,8 +486,12 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			return valid(nil), engine.InvalidPayloadAttributes.With(err)
 		}
 		api.localBlocks.put(id, payload)
+		fmt.Println("noTxkym: ", args.NoTxPool, " time: ", args.Timestamp, " now: ", time.Now().Unix())
+		api.eth.SbbService().SetNoTxPool(args.NoTxPool)
+
 		return valid(&id), nil
 	}
+	fmt.Println("noTxkym22: ", payloadAttributes.NoTxPool, " time: ", payloadAttributes.Timestamp, " now: ", time.Now().Unix())
 	return valid(nil), nil
 }
 
@@ -559,10 +563,13 @@ func (api *ConsensusAPI) GetPayloadV4(payloadID engine.PayloadID) (*engine.Execu
 
 func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*engine.ExecutionPayloadEnvelope, error) {
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
-	if !api.eth.SbbService().FinishedTxsSetting() || api.eth.SbbService().FinishedNewPayload() {
+
+	service := api.eth.SbbService()
+	if !service.NoTxPool() && (!service.FinishedTxsSetting() || service.FinishedNewPayload()) {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return nil, engine.GenericServerError
 	}
+
 	data := api.localBlocks.get(payloadID, full)
 	if data == nil {
 		return nil, engine.UnknownPayload
@@ -846,8 +853,9 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	// Hence, we use a lock here, to be sure that the previous call has finished before we
 	// check whether we already have the block locally.
 
-	if !api.eth.SbbService().FinishedTxsSetting() || api.eth.SbbService().FinishedNewPayload() {
-		log.Error("failed to get the payload because the transaction pool is not ready yet.")
+	service := api.eth.SbbService()
+	if !service.NoTxPool() && (!service.FinishedTxsSetting() || service.FinishedNewPayload()) {
+		log.Error("failed to create the payload because the transaction pool is not ready yet.")
 		return api.invalid(engine.GenericServerError, nil), nil
 	}
 

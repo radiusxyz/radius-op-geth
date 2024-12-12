@@ -49,24 +49,31 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:           downloader.SnapSync,
-	NetworkId:          0, // enable auto configuration of networkID == chainID
-	TxLookupLimit:      2350000,
-	TransactionHistory: 2350000,
-	StateHistory:       params.FullImmutabilityThreshold,
-	DatabaseCache:      512,
-	TrieCleanCache:     154,
-	TrieDirtyCache:     256,
-	TrieTimeout:        60 * time.Minute,
-	SnapshotCache:      102,
-	FilterLogCacheSize: 32,
-	Miner:              miner.DefaultConfig,
-	TxPool:             legacypool.DefaultConfig,
-	BlobPool:           blobpool.DefaultConfig,
-	RPCGasCap:          50000000,
-	RPCEVMTimeout:      5 * time.Second,
-	GPO:                FullNodeGPO,
-	RPCTxFeeCap:        1, // 1 ether
+	SyncMode:                downloader.SnapSync,
+	NetworkId:               0, // enable auto configuration of networkID == chainID
+	TxLookupLimit:           2350000,
+	TransactionHistory:      2350000,
+	StateHistory:            params.FullImmutabilityThreshold,
+	DatabaseCache:           512,
+	TrieCleanCache:          154,
+	TrieDirtyCache:          256,
+	TrieTimeout:             60 * time.Minute,
+	SnapshotCache:           102,
+	FilterLogCacheSize:      32,
+	Miner:                   miner.DefaultConfig,
+	TxPool:                  legacypool.DefaultConfig,
+	BlobPool:                blobpool.DefaultConfig,
+	RPCGasCap:               50000000,
+	RPCEVMTimeout:           5 * time.Second,
+	GPO:                     FullNodeGPO,
+	RPCTxFeeCap:             1, // 1 ether
+	Platform:                "1",
+	RollupId:                "1",
+	ExecutorAddress:         "1",
+	L1Url:                   "1",
+	LivenessContractAddress: "1",
+	ClusterId:               "1",
+	SeedNodeUrl:             "1",
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -185,13 +192,13 @@ type Config struct {
 	InteropMessageRPC       string `toml:",omitempty"`
 	InteropMempoolFiltering bool   `toml:",omitempty"`
 
-	Platform                string `toml:",omitempty"`
-	RollupId                string `toml:",omitempty"`
-	ExecutorAddress         string `toml:",omitempty"`
-	L1Url                   string `toml:",omitempty"`
-	LivenessContractAddress string `toml:",omitempty"`
-	ClusterId               string `toml:",omitempty"`
-	SeedNodeUrl             string `toml:",omitempty"`
+	Platform                string
+	RollupId                string
+	ExecutorAddress         string
+	L1Url                   string
+	LivenessContractAddress string
+	ClusterId               string
+	SeedNodeUrl             string
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

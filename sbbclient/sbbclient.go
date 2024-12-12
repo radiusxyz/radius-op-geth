@@ -28,6 +28,7 @@ func New() *SbbClient {
 
 func makeRequest(ctx context.Context, url string, body interface{}) (*http.Request, error) {
 	b, err := json.Marshal(body)
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
 	if err != nil {
 		return nil, err
@@ -39,11 +40,12 @@ func makeRequest(ctx context.Context, url string, body interface{}) (*http.Reque
 	return req, nil
 }
 
-func (sc *SbbClient) Send(ctx context.Context, url string, body interface{}, result interface{}) error {
+func (sc *SbbClient) Send(ctx context.Context, url string, body interface{}, result any) error {
 	req, err := makeRequest(ctx, url, body)
 	if err != nil {
 		return err
 	}
+
 	res, err := sc.httpClient.Do(req)
 	if err != nil {
 		return err
