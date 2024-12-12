@@ -46,6 +46,7 @@ type SbbService struct {
 	finishedTxsSetting      bool
 	finishedNewPayload      bool
 	noTxPool                bool
+	syncTime                uint64
 }
 
 func NewSbbService(eth *Ethereum) (*SbbService, error) {
@@ -67,11 +68,20 @@ func NewSbbService(eth *Ethereum) (*SbbService, error) {
 		finishedTxsSetting:      false,
 		finishedNewPayload:      true,
 		noTxPool:                true,
+		syncTime:                0,
 	}, nil
 }
 
 func (s *SbbService) NoTxPool() bool {
 	return s.noTxPool
+}
+
+func (s *SbbService) SetSyncTime(t uint64) {
+	s.syncTime = t
+}
+
+func (s *SbbService) IsSyncing() bool {
+	return s.syncTime+2 < uint64(time.Now().Unix())
 }
 
 func (s *SbbService) SetNoTxPool(flag bool) {
@@ -118,33 +128,68 @@ func (s *SbbService) Start() {
 //	return body, nil
 //}
 
-func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
-	params := GetRawTransactionsParams{
-		RollupId:          s.rollupId,
-		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
-	}
+func (s *SbbService) eventLoop() ethereum.Subscription {
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		eventsCtx, eventsCancel := context.WithCancel(context.Background())
+		defer eventsCancel()
+		// We can handle a quit signal while fn is running, by closing the ctx.
+		go func() {
+			select {
+			case <-quit:
+				eventsCancel()
+			case <-eventsCtx.Done(): // don't wait for quit signal if we closed for other reasons.
+				return
+			}
+		}()
 
-	log.Info("getRawTransactionList RollupId: ", params.RollupId, "RollupBlockHeight: ", params.RollupBlockHeight)
+		errCh := make(chan error, 1)
 
-	body := newJsonRpcRequest(GetRawTransactionList, params)
-	//body, err := makeBody(GetRawTransactionList, params)
-	//if err != nil {
-	//	log.Error("failed to make body while finalizing the block in getRawTransactionList method")
-	//	return nil, err
-	//}
+		for {
+			if !s.IsSyncing() {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
 
-	res := &GetRawTransactionsResponse{}
-	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
-		log.Error("failed to send get_transaction_list request to SBB")
-		return nil, err
-	}
+		l1HeadNum, err := s.fetchL1HeadNum(eventsCtx)
+		if err != nil {
+			return err
+		}
+		url, err := s.getSequencerUrl(eventsCtx, *l1HeadNum)
+		if err != nil {
+			return err
+		}
+		s.finalizeBlock(*url, *l1HeadNum, errCh)
 
-	var txs []*types.Transaction
-	for _, hexString := range res.RawTransactions {
-		tx, _ := hexToTx(hexString)
-		txs = append(txs, tx)
-	}
-	return txs, nil
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if s.noTxPool {
+					continue
+				}
+				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
+				if err != nil {
+					log.Error("failed to fetch l1 head", err.Error())
+					return err
+				}
+				url, err = s.getSequencerUrl(eventsCtx, *l1HeadNum)
+				if err != nil {
+					log.Error("failed to fetch sequencer url", err.Error())
+					return err
+				}
+				go s.processTransactions(eventsCtx, *url, errCh)
+				go s.finalizeBlock(*url, *l1HeadNum, errCh)
+			case <-eventsCtx.Done():
+				return nil
+			case err, _ := <-errCh:
+				fmt.Println("something error: ", err.Error())
+				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
+			}
+		}
+	})
 }
 
 func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
@@ -158,6 +203,23 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 	}
 	log.Info("Successfully fetched the block number from L1.", "num", l1HeadNum)
 	return &l1HeadNum, nil
+}
+
+func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*string, error) {
+	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
+	if err != nil {
+		return nil, err
+	}
+	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := s.getSequencerIndex(urls)
+	if err != nil {
+		return nil, err
+	}
+	return &urls[*index], nil
 }
 
 func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
@@ -222,6 +284,15 @@ func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []s
 	return urls, nil
 }
 
+func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
+	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
+	if len(urls) < 1 {
+		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
+	}
+	mod := blockNum % uint64(len(urls))
+	return &mod, nil
+}
+
 func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan error) {
 	if !s.finishedNewPayload {
 		errCh <- errors.New("transactions are not ready to be processed yet")
@@ -264,96 +335,6 @@ func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan erro
 	log.Info("Successfully finalized the contents to be included in the block.", "block num", targetNum)
 }
 
-func (s *SbbService) eventLoop() ethereum.Subscription {
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		eventsCtx, eventsCancel := context.WithCancel(context.Background())
-		defer eventsCancel()
-		// We can handle a quit signal while fn is running, by closing the ctx.
-		go func() {
-			select {
-			case <-quit:
-				eventsCancel()
-			case <-eventsCtx.Done(): // don't wait for quit signal if we closed for other reasons.
-				return
-			}
-		}()
-
-		errCh := make(chan error, 1)
-
-		for {
-			if !s.noTxPool {
-				break
-			}
-			time.Sleep(1 * time.Second)
-		}
-
-		l1HeadNum, err := s.fetchL1HeadNum(eventsCtx)
-		if err != nil {
-			return err
-		}
-		url, err := s.getSequencerUrl(eventsCtx, *l1HeadNum)
-		if err != nil {
-			return err
-		}
-		s.finalizeBlock(*url, *l1HeadNum, errCh)
-
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				if s.noTxPool {
-					continue
-				}
-				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
-				if err != nil {
-					log.Error("failed to fetch l1 head", err.Error())
-					return err
-				}
-				url, err = s.getSequencerUrl(eventsCtx, *l1HeadNum)
-				if err != nil {
-					log.Error("failed to fetch sequencer url", err.Error())
-					return err
-				}
-				go s.processTransactions(eventsCtx, *url, errCh)
-				go s.finalizeBlock(*url, *l1HeadNum, errCh)
-			case <-eventsCtx.Done():
-				return nil
-			case err, _ := <-errCh:
-				log.Error("something error: ", err.Error())
-				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
-			}
-		}
-	})
-}
-
-func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*string, error) {
-	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
-	if err != nil {
-		return nil, err
-	}
-	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
-	if err != nil {
-		return nil, err
-	}
-
-	index, err := s.getSequencerIndex(urls)
-	if err != nil {
-		return nil, err
-	}
-	return &urls[*index], nil
-}
-
-func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
-	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
-	if len(urls) < 1 {
-		return nil, errors.New("there are no URLs available, making modular arithmetic impossible")
-	}
-	mod := blockNum % uint64(len(urls))
-	return &mod, nil
-}
-
 func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
 	if s.finishedTxsSetting {
 		errCh <- errors.New("transactions are not ready to be processed yet")
@@ -369,14 +350,45 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 		errCh <- err
 		return
 	}
-	if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
-		log.Error("failed to add the transactions to the transaction pool")
-		errCh <- err
-		return
+	if len(txs) > 0 {
+		if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
+			log.Error("failed to add the transactions to the transaction pool")
+			errCh <- err
+			return
+		}
 	}
 	s.CompleteTxsSetting()
 
-	log.Info("Transaction processing succeeded", "tx count", len(txs))
+	fmt.Println("Transaction processing succeeded", "tx count", len(txs))
+}
+
+func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
+	params := GetRawTransactionsParams{
+		RollupId:          s.rollupId,
+		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
+	}
+
+	fmt.Println("getRawTransactionList RollupId: ", params.RollupId, "RollupBlockHeight: ", params.RollupBlockHeight)
+
+	body := newJsonRpcRequest(GetRawTransactionList, params)
+	//body, err := makeBody(GetRawTransactionList, params)
+	//if err != nil {
+	//	log.Error("failed to make body while finalizing the block in getRawTransactionList method")
+	//	return nil, err
+	//}
+
+	res := &GetRawTransactionsResponse{}
+	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
+		log.Error("failed to send get_transaction_list request to SBB")
+		return nil, err
+	}
+
+	var txs []*types.Transaction
+	for _, hexString := range res.RawTransactions {
+		tx, _ := hexToTx(hexString)
+		txs = append(txs, tx)
+	}
+	return txs, nil
 }
 
 func hexToTx(str string) (*types.Transaction, error) {

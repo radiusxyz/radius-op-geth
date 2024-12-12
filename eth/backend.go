@@ -473,7 +473,10 @@ func (s *Ethereum) SubmitRawTransactions(txs types.Transactions) error {
 	if s.APIBackend.disableTxPool {
 		return nil
 	}
-	return s.txPool.Add(txs, true, false)[0]
+	if errs := s.txPool.Add(txs, true, false); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
 }
 
 func checkTxFee(gasPrice *big.Int, gas uint64, cap float64) error {
