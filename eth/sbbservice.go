@@ -81,7 +81,8 @@ func (s *SbbService) SetSyncTime(t uint64) {
 }
 
 func (s *SbbService) IsSyncing() bool {
-	return s.syncTime+2 < uint64(time.Now().Unix())
+	return s.syncTime < uint64(time.Now().Unix())+2
+	//return true
 }
 
 func (s *SbbService) SetNoTxPool(flag bool) {
