@@ -479,7 +479,7 @@ func (miner *Miner) checkInterop(ctx context.Context, tx *types.Transaction, fai
 	return nil
 }
 
-func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
+func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *transactionsBySeqAndNonce, interrupt *atomic.Int32) error {
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
@@ -507,7 +507,7 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 		// Retrieve the next transaction and abort if all done.
 		var (
 			ltx *txpool.LazyTransaction
-			txs *transactionsByPriceAndNonce
+			txs *transactionsBySeqAndNonce
 		)
 		pltx, ptip := plainTxs.Peek()
 		bltx, btip := blobTxs.Peek()
@@ -649,16 +649,16 @@ func (miner *Miner) fillTransactions(interrupt *atomic.Int32, env *environment) 
 	}
 	// Fill the block with all available pending transactions.
 	if len(localPlainTxs) > 0 || len(localBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, localPlainTxs, env.header.BaseFee)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, localBlobTxs, env.header.BaseFee)
+		plainTxs := newTransactionsBySeqAndNonce(env.signer, localPlainTxs, env.header.BaseFee)
+		blobTxs := newTransactionsBySeqAndNonce(env.signer, localBlobTxs, env.header.BaseFee)
 
 		if err := miner.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 			return err
 		}
 	}
 	if len(remotePlainTxs) > 0 || len(remoteBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, remotePlainTxs, env.header.BaseFee)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, remoteBlobTxs, env.header.BaseFee)
+		plainTxs := newTransactionsBySeqAndNonce(env.signer, remotePlainTxs, env.header.BaseFee)
+		blobTxs := newTransactionsBySeqAndNonce(env.signer, remoteBlobTxs, env.header.BaseFee)
 
 		if err := miner.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 			return err

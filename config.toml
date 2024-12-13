@@ -1,6 +1,6 @@
 [Eth]
 Platform = "ethereum"
-RollupId = "rollup_id"
+RollupId = "rollup_id_2"
 ExecutorAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 L1Url = "http://34.64.226.211:8545"
 LivenessContractAddress = "0x84eA74d481Ee0A5332c457a4d796187F6Ba67fEB"

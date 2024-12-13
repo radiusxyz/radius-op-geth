@@ -317,6 +317,12 @@ func (tx *Transaction) Value() *big.Int { return new(big.Int).Set(tx.inner.value
 // Nonce returns the sender account nonce of the transaction.
 func (tx *Transaction) Nonce() uint64 { return tx.inner.nonce() }
 
+func (tx *Transaction) Seq() int { return tx.seq }
+
+func (tx *Transaction) SetSeq(seq int) {
+	tx.seq = seq
+}
+
 // EffectiveNonce returns the nonce that was actually used as part of transaction execution
 // Returns nil if the effective nonce is not known
 func (tx *Transaction) EffectiveNonce() *uint64 {

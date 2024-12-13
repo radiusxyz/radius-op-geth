@@ -118,17 +118,6 @@ func (s *SbbService) Start() {
 	s.eventLoop()
 }
 
-//func makeBody[T any](method Method, params T) ([]byte, error) {
-//	jsonRpcRequest := newJsonRpcRequest(method, params)
-//	fmt.Println("iiiiiii: ", jsonRpcRequest)
-//	body, err := json.MarshalIndent(jsonRpcRequest, "", "")
-//	fmt.Println("lllllllll: ", string(body))
-//	if err != nil {
-//		return nil, err
-//	}
-//	return body, nil
-//}
-
 func (s *SbbService) eventLoop() ethereum.Subscription {
 	return event.NewSubscription(func(quit <-chan struct{}) error {
 		eventsCtx, eventsCancel := context.WithCancel(context.Background())
@@ -186,7 +175,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			case <-eventsCtx.Done():
 				return nil
 			case err, _ := <-errCh:
-				fmt.Println("something error: ", err.Error())
+				fmt.Println(log.Blue+"something error: ", err.Error())
 				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
 			}
 		}
@@ -202,7 +191,6 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 		log.Error("failed to fetch l1 head number")
 		return nil, err
 	}
-	log.Info("Successfully fetched the block number from L1.", "num", l1HeadNum)
 	return &l1HeadNum, nil
 }
 
@@ -312,13 +300,6 @@ func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan erro
 		Message:   message,
 		Signature: "",
 	}
-	fmt.Println("finalizeBlock RollupId: ", message.RollupId, "RollupBlockHeight: ", message.RollupBlockHeight)
-	//body, err := makeBody(FinalizeBlock, params)
-	//if err != nil {
-	//	log.Error("failed to make body while finalizing the block in finalizeBlock method")
-	//	errCh <- err
-	//	return
-	//}
 
 	body := newJsonRpcRequest(FinalizeBlock, params)
 
@@ -333,7 +314,7 @@ func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan erro
 	}
 	s.ResetFinishedNewPayload()
 
-	log.Info("Successfully finalized the contents to be included in the block.", "block num", targetNum)
+	fmt.Println(log.Blue+"Successfully finalized the contents to be included in the block. ", "block num: ", targetNum)
 }
 
 func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
@@ -344,7 +325,9 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 
 	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer reqCancel()
-	txs, err := s.getRawTransactionList(reqCtx, url)
+
+	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
+	txs, err := s.getRawTransactionList(reqCtx, url, blockNum)
 	if err != nil {
 		// Error Wrapping 적용해보기.
 		log.Error("failed to fetch transactions from SBB")
@@ -360,24 +343,15 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 	}
 	s.CompleteTxsSetting()
 
-	fmt.Println("Transaction processing succeeded", "tx count", len(txs))
+	fmt.Println(log.Blue+"Transaction processing succeeded.", "tx count: ", len(txs), " block num: ", blockNum)
 }
 
-func (s *SbbService) getRawTransactionList(ctx context.Context, url string) (types.Transactions, error) {
+func (s *SbbService) getRawTransactionList(ctx context.Context, url string, blockNum uint64) (types.Transactions, error) {
 	params := GetRawTransactionsParams{
 		RollupId:          s.rollupId,
-		RollupBlockHeight: s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1,
+		RollupBlockHeight: blockNum,
 	}
-
-	fmt.Println("getRawTransactionList RollupId: ", params.RollupId, "RollupBlockHeight: ", params.RollupBlockHeight)
-
 	body := newJsonRpcRequest(GetRawTransactionList, params)
-	//body, err := makeBody(GetRawTransactionList, params)
-	//if err != nil {
-	//	log.Error("failed to make body while finalizing the block in getRawTransactionList method")
-	//	return nil, err
-	//}
-
 	res := &GetRawTransactionsResponse{}
 	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
 		log.Error("failed to send get_transaction_list request to SBB")

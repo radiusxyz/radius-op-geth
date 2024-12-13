@@ -458,7 +458,8 @@ func (s *Ethereum) Start() error {
 }
 
 func (s *Ethereum) SubmitRawTransactions(txs types.Transactions) error {
-	for _, tx := range txs {
+	for i, tx := range txs {
+		tx.SetSeq(i)
 		if err := checkTxFee(tx.GasPrice(), tx.Gas(), s.APIBackend.RPCTxFeeCap()); err != nil {
 			return err
 		}
