@@ -69,6 +69,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RollupHaltOnIncompatibleProtocolVersion   string
 		InteropMessageRPC                         string `toml:",omitempty"`
 		InteropMempoolFiltering                   bool   `toml:",omitempty"`
+
+		UseSequencingMode 		bool
 		Platform                string
 		RollupId                string
 		ExecutorAddress         string
@@ -130,6 +132,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RollupHaltOnIncompatibleProtocolVersion = c.RollupHaltOnIncompatibleProtocolVersion
 	enc.InteropMessageRPC = c.InteropMessageRPC
 	enc.InteropMempoolFiltering = c.InteropMempoolFiltering
+	enc.UseSequencingMode 		= c.UseSequencingMode
 	enc.Platform                = c.Platform
 	enc.RollupId                = c.RollupId
 	enc.ExecutorAddress         = c.ExecutorAddress
@@ -195,6 +198,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RollupHaltOnIncompatibleProtocolVersion   *string
 		InteropMessageRPC                         *string `toml:",omitempty"`
 		InteropMempoolFiltering                   *bool   `toml:",omitempty"`
+		UseSequencingMode 		*bool
 		Platform                *string
 		RollupId                *string
 		ExecutorAddress         *string
@@ -362,6 +366,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.InteropMempoolFiltering != nil {
 		c.InteropMempoolFiltering = *dec.InteropMempoolFiltering
+	}
+	if dec.UseSequencingMode != nil {
+		c.UseSequencingMode = *dec.UseSequencingMode
 	}
 	if dec.Platform != nil {
 		c.Platform = *dec.Platform

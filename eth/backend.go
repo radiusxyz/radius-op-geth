@@ -321,11 +321,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 		eth.seqRPCService = client
 	} else {
-		sbbService, err := NewSbbService(eth)
-		if err != nil {
-			return nil, err
+		if config.UseSequencingMode {
+			sbbService, err := NewSbbService(eth)
+			if err != nil {
+				return nil, err
+			}
+			eth.sbbService = sbbService
 		}
-		eth.sbbService = sbbService
 	}
 
 	if config.RollupHistoricalRPC != "" {
@@ -453,7 +455,9 @@ func (s *Ethereum) Start() error {
 	// Start the networking layer
 	s.handler.Start(s.p2pServer.MaxPeers)
 
-	s.sbbService.Start()
+	if s.sbbService != nil {
+		s.sbbService.Start()
+	}
 	return nil
 }
 

@@ -194,6 +194,7 @@ func (n *Node) Start() error {
 		}
 		started = append(started, lifecycle)
 	}
+
 	// Check if any lifecycle failed to start.
 	if err != nil {
 		n.stopServices(started)

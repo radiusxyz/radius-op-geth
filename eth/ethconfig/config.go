@@ -67,13 +67,14 @@ var Defaults = Config{
 	RPCEVMTimeout:           5 * time.Second,
 	GPO:                     FullNodeGPO,
 	RPCTxFeeCap:             1, // 1 ether
-	Platform:                "1",
-	RollupId:                "1",
-	ExecutorAddress:         "1",
-	L1Url:                   "1",
-	LivenessContractAddress: "1",
-	ClusterId:               "1",
-	SeedNodeUrl:             "1",
+	UseSequencingMode:       false,
+	Platform:                "",
+	RollupId:                "",
+	ExecutorAddress:         "",
+	L1Url:                   "",
+	LivenessContractAddress: "",
+	ClusterId:               "",
+	SeedNodeUrl:             "",
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -192,6 +193,7 @@ type Config struct {
 	InteropMessageRPC       string `toml:",omitempty"`
 	InteropMempoolFiltering bool   `toml:",omitempty"`
 
+	UseSequencingMode       bool
 	Platform                string
 	RollupId                string
 	ExecutorAddress         string

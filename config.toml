@@ -1,8 +1,10 @@
+# This configuration file is only required when running in sequencing mode.
 [Eth]
+UseSequencingMode = true
 Platform = "ethereum"
-RollupId = "rollup_id_2"
+RollupId = "rollup_id_6"
 ExecutorAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-L1Url = "http://34.64.226.211:8545"
+L1Url = "http://34.47.70.238:8545"
 LivenessContractAddress = "0x84eA74d481Ee0A5332c457a4d796187F6Ba67fEB"
 ClusterId = "radius"
 SeedNodeUrl = "http://34.64.226.211:6000"

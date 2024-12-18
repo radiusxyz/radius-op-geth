@@ -487,11 +487,12 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		}
 		api.localBlocks.put(id, payload)
 
-		fmt.Println(log.Blue+"Engine API Build Num: ", block.Number().Uint64()+1, " Timestamp: ", args.Timestamp, "Now: ", time.Now().UnixMilli(), " NoTx: ", args.NoTxPool)
-
-		service := api.eth.SbbService()
-		service.SetNoTxPool(args.NoTxPool)
-		service.SetSyncTime(args.Timestamp)
+		sbbService := api.eth.SbbService()
+		if sbbService != nil {
+			sbbService.SetNoTxPool(args.NoTxPool)
+			sbbService.SetSyncTime(args.Timestamp)
+			fmt.Println(log.Blue+"Engine API Build Num: ", block.Number().Uint64()+1, " Timestamp: ", args.Timestamp, "Now: ", time.Now().UnixMilli(), " NoTx: ", args.NoTxPool)
+		}
 
 		return valid(&id), nil
 	}
@@ -566,9 +567,8 @@ func (api *ConsensusAPI) GetPayloadV4(payloadID engine.PayloadID) (*engine.Execu
 
 func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*engine.ExecutionPayloadEnvelope, error) {
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
-
-	service := api.eth.SbbService()
-	if !service.IsSyncing() && !service.NoTxPool() && (!service.FinishedTxsSetting() || service.FinishedNewPayload()) {
+	sbbService := api.eth.SbbService()
+	if sbbService != nil && !sbbService.IsSyncing() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return nil, engine.GenericServerError
 	}
@@ -577,7 +577,10 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 	if data == nil {
 		return nil, engine.UnknownPayload
 	}
-	fmt.Println(log.Blue+"Engine API Get Num: ", data.ExecutionPayload.Number, " Block Timestamp: ", data.ExecutionPayload.Timestamp, "Now: ", time.Now().UnixMilli())
+
+	if sbbService != nil {
+		fmt.Println(log.Blue+"Engine API Get Num: ", data.ExecutionPayload.Number, " Block Timestamp: ", data.ExecutionPayload.Timestamp, "Now: ", time.Now().UnixMilli())
+	}
 	return data, nil
 }
 
@@ -856,9 +859,9 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	//    sequentially.
 	// Hence, we use a lock here, to be sure that the previous call has finished before we
 	// check whether we already have the block locally.
-	fmt.Println(log.Blue+"Engine API New Num: ", params.Number, " Block Timestamp: ", params.Timestamp, "Now: ", time.Now().UnixMilli())
-	service := api.eth.SbbService()
-	if !service.IsSyncing() && !service.NoTxPool() && (!service.FinishedTxsSetting() || service.FinishedNewPayload()) {
+
+	sbbService := api.eth.SbbService()
+	if sbbService != nil && !sbbService.IsSyncing() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
 		log.Error("failed to create the payload because the transaction pool is not ready yet.")
 		return api.invalid(engine.GenericServerError, nil), nil
 	}
@@ -984,8 +987,11 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 		*ow, _ = rlp.EncodeToBytes(proofs)
 	}
 
-	api.eth.SbbService().ResetFinishedTxsSetting()
-	api.eth.SbbService().CompleteNewPayload()
+	if sbbService != nil {
+		api.eth.SbbService().ResetFinishedTxsSetting()
+		api.eth.SbbService().CompleteNewPayload()
+		fmt.Println(log.Blue+"Engine API New Num: ", params.Number, " Block Timestamp: ", params.Timestamp, "Now: ", time.Now().UnixMilli())
+	}
 
 	return engine.PayloadStatusV1{Status: engine.VALID, Witness: ow, LatestValidHash: &hash}, nil
 }
