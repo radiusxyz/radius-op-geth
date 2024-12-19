@@ -2,9 +2,9 @@
 [Eth]
 UseSequencingMode = true
 Platform = "ethereum"
-RollupId = "rollup_id_6"
+RollupId = "radius_rollup_2"
 ExecutorAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-L1Url = "http://34.47.70.238:8545"
-LivenessContractAddress = "0x84eA74d481Ee0A5332c457a4d796187F6Ba67fEB"
+L1Url = "https://ethereum-holesky-rpc.publicnode.com"
+LivenessContractAddress = "0xF05D4533801F921ae57f244EfD15B48f6E60a0ba"
 ClusterId = "radius"
-SeedNodeUrl = "http://34.64.226.211:6000"
+SeedNodeUrl = "http://34.47.85.214:6000"

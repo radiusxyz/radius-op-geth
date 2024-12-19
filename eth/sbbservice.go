@@ -80,9 +80,8 @@ func (s *SbbService) SetSyncTime(t uint64) {
 	s.syncTime = t
 }
 
-func (s *SbbService) IsSyncing() bool {
-	return s.syncTime < uint64(time.Now().Unix())+2
-	//return true
+func (s *SbbService) IsSyncCompleted() bool {
+	return s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix())
 }
 
 func (s *SbbService) SetNoTxPool(flag bool) {
@@ -135,7 +134,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 		errCh := make(chan error, 1)
 
 		for {
-			if !s.IsSyncing() {
+			if s.IsSyncCompleted() {
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -145,10 +144,12 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 		if err != nil {
 			return err
 		}
+
 		url, err := s.getSequencerUrl(eventsCtx, *l1HeadNum)
 		if err != nil {
 			return err
 		}
+
 		s.finalizeBlock(*url, *l1HeadNum, errCh)
 
 		ticker := time.NewTicker(2 * time.Second)
@@ -199,6 +200,7 @@ func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*st
 	if err != nil {
 		return nil, err
 	}
+
 	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
 	if err != nil {
 		return nil, err
@@ -208,6 +210,7 @@ func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*st
 	if err != nil {
 		return nil, err
 	}
+
 	return &urls[*index], nil
 }
 

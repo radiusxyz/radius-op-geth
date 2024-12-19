@@ -567,8 +567,9 @@ func (api *ConsensusAPI) GetPayloadV4(payloadID engine.PayloadID) (*engine.Execu
 
 func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*engine.ExecutionPayloadEnvelope, error) {
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
+
 	sbbService := api.eth.SbbService()
-	if sbbService != nil && !sbbService.IsSyncing() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
+	if sbbService != nil && sbbService.IsSyncCompleted() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return nil, engine.GenericServerError
 	}
@@ -861,7 +862,7 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	// check whether we already have the block locally.
 
 	sbbService := api.eth.SbbService()
-	if sbbService != nil && !sbbService.IsSyncing() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
+	if sbbService != nil && sbbService.IsSyncCompleted() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
 		log.Error("failed to create the payload because the transaction pool is not ready yet.")
 		return api.invalid(engine.GenericServerError, nil), nil
 	}
