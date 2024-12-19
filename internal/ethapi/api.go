@@ -2144,41 +2144,6 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	return tx.Hash(), nil
 }
 
-// SendTransaction creates a transaction for the given argument, sign it and submit it to the
-// transaction pool.
-func (api *TransactionAPI) SendTransaction(ctx context.Context, args TransactionArgs) (common.Hash, error) {
-	// Look up the wallet containing the requested signer
-	account := accounts.Account{Address: args.from()}
-
-	wallet, err := api.b.AccountManager().Find(account)
-	if err != nil {
-		return common.Hash{}, err
-	}
-
-	if args.Nonce == nil {
-		// Hold the mutex around signing to prevent concurrent assignment of
-		// the same nonce to multiple accounts.
-		api.nonceLock.LockAddr(args.from())
-		defer api.nonceLock.UnlockAddr(args.from())
-	}
-	if args.IsEIP4844() {
-		return common.Hash{}, errBlobTxNotSupported
-	}
-
-	// Set some sanity defaults and terminate on failure
-	if err := args.setDefaults(ctx, api.b, false); err != nil {
-		return common.Hash{}, err
-	}
-	// Assemble the transaction and sign with the wallet
-	tx := args.ToTransaction(types.LegacyTxType)
-
-	signed, err := wallet.SignTx(account, tx, api.b.ChainConfig().ChainID)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	return SubmitTransaction(ctx, api.b, signed)
-}
-
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
 // on a given unsigned transaction, and returns it to the caller for further
 // processing (signing + broadcast).
@@ -2196,16 +2161,6 @@ func (api *TransactionAPI) FillTransaction(ctx context.Context, args Transaction
 		return nil, err
 	}
 	return &SignTransactionResult{data, tx}, nil
-}
-
-// SendRawTransaction will add the signed transaction to the transaction pool.
-// The sender is responsible for signing the transaction and using the correct nonce.
-func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
-	tx := new(types.Transaction)
-	if err := tx.UnmarshalBinary(input); err != nil {
-		return common.Hash{}, err
-	}
-	return SubmitTransaction(ctx, api.b, tx)
 }
 
 // Sign calculates an ECDSA signature for:
@@ -2360,6 +2315,64 @@ func (api *TransactionAPI) Resend(ctx context.Context, sendArgs TransactionArgs,
 		}
 	}
 	return common.Hash{}, fmt.Errorf("transaction %#x not found", matchTx.Hash())
+}
+
+type TransactionSubmissionAPI struct {
+	b         Backend
+	nonceLock *AddrLocker
+	signer    types.Signer
+}
+
+func NewTransactionSubmissionAPI(b Backend, nonceLock *AddrLocker) *TransactionAPI {
+	// The signer used by the API should always be the 'latest' known one because we expect
+	// signers to be backwards-compatible with old transactions.
+	signer := types.LatestSigner(b.ChainConfig())
+	return &TransactionAPI{b, nonceLock, signer}
+}
+
+// SendRawTransaction will add the signed transaction to the transaction pool.
+// The sender is responsible for signing the transaction and using the correct nonce.
+func (api *TransactionSubmissionAPI) SendRawTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return common.Hash{}, err
+	}
+	return SubmitTransaction(ctx, api.b, tx)
+}
+
+// SendTransaction creates a transaction for the given argument, sign it and submit it to the
+// transaction pool.
+func (api *TransactionSubmissionAPI) SendTransaction(ctx context.Context, args TransactionArgs) (common.Hash, error) {
+	// Look up the wallet containing the requested signer
+	account := accounts.Account{Address: args.from()}
+
+	wallet, err := api.b.AccountManager().Find(account)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	if args.Nonce == nil {
+		// Hold the mutex around signing to prevent concurrent assignment of
+		// the same nonce to multiple accounts.
+		api.nonceLock.LockAddr(args.from())
+		defer api.nonceLock.UnlockAddr(args.from())
+	}
+	if args.IsEIP4844() {
+		return common.Hash{}, errBlobTxNotSupported
+	}
+
+	// Set some sanity defaults and terminate on failure
+	if err := args.setDefaults(ctx, api.b, false); err != nil {
+		return common.Hash{}, err
+	}
+	// Assemble the transaction and sign with the wallet
+	tx := args.ToTransaction(types.LegacyTxType)
+
+	signed, err := wallet.SignTx(account, tx, api.b.ChainConfig().ChainID)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return SubmitTransaction(ctx, api.b, signed)
 }
 
 // DebugAPI is the collection of Ethereum APIs exposed over the debugging

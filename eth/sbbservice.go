@@ -81,6 +81,7 @@ func (s *SbbService) SetSyncTime(t uint64) {
 }
 
 func (s *SbbService) IsSyncCompleted() bool {
+	//fmt.Println("btime: ", s.syncTime, " now: ", uint64(time.Now().Unix()), s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix()))
 	return s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix())
 }
 
@@ -145,13 +146,13 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			return err
 		}
 
-		url, err := s.getSequencerUrl(eventsCtx, *l1HeadNum)
+		url, sequencerAddress, nextSequencerAddress, err := s.getSequencer(eventsCtx, *l1HeadNum)
 		if err != nil {
 			return err
 		}
 
-		s.finalizeBlock(*url, *l1HeadNum, errCh)
-
+		s.finalizeBlock(*url, *sequencerAddress, *nextSequencerAddress, *l1HeadNum, errCh)
+		fmt.Println(log.Yellow + "First Finalize")
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -163,16 +164,16 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 				}
 				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
 				if err != nil {
-					log.Error("failed to fetch l1 head", err.Error())
-					return err
+					log.Error("failed to fetch l1 head", "error", err.Error())
+					continue
 				}
-				url, err = s.getSequencerUrl(eventsCtx, *l1HeadNum)
+				url, sequencerAddress, nextSequencerAddress, err = s.getSequencer(eventsCtx, *l1HeadNum)
 				if err != nil {
-					log.Error("failed to fetch sequencer url", err.Error())
-					return err
+					log.Error("failed to fetch sequencer url", "error", err.Error())
+					continue
 				}
 				go s.processTransactions(eventsCtx, *url, errCh)
-				go s.finalizeBlock(*url, *l1HeadNum, errCh)
+				go s.finalizeBlock(*url, *sequencerAddress, *nextSequencerAddress, *l1HeadNum, errCh)
 			case <-eventsCtx.Done():
 				return nil
 			case err, _ := <-errCh:
@@ -189,29 +190,30 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 
 	l1HeadNum, err := s.ethClient.BlockNumber(reqCtx)
 	if err != nil {
-		log.Error("failed to fetch l1 head number")
+		log.Error("failed to fetch l1 head number", "error", err.Error())
 		return nil, err
 	}
 	return &l1HeadNum, nil
 }
 
-func (s *SbbService) getSequencerUrl(ctx context.Context, l1HeadNum uint64) (*string, error) {
+func (s *SbbService) getSequencer(ctx context.Context, l1HeadNum uint64) (*string, *string, *string, error) {
 	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	index, err := s.getSequencerIndex(urls)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return &urls[*index], nil
+	nextIndex := (*index + 1) % uint64(len(urls))
+	return &urls[*index], &addresses[*index], &addresses[nextIndex], nil
 }
 
 func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
@@ -236,7 +238,7 @@ func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum ui
 	}
 	result, err := s.ethClient.CallContract(reqCtx, query, big.NewInt(int64(l1HeadNum)))
 	if err != nil {
-		log.Error("failed to make a contract call to retrieve the sequencer URL list.")
+		log.Error("failed to make a contract call to retrieve the sequencer URL list", "error", err.Error())
 		return nil, err
 	}
 	var sequencerList []common.Address
@@ -266,12 +268,12 @@ func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []s
 
 	res := &GetSequencerRpcUrlsResponse{}
 	if err := s.sbbClient.Send(ctx, s.seedNodeUrl, body, res); err != nil {
-		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node")
+		log.Error("failed to send get_sequencer_rpc_url_list request to seeder node", "error", err.Error())
 		return nil, err
 	}
 	var urls []string
 	for _, sequencer := range res.SequencerRrcUrls {
-		urls = append(urls, sequencer.ExternalRpcUrl)
+		urls = append(urls, sequencer.ClusterRpcUrl)
 	}
 	return urls, nil
 }
@@ -285,19 +287,21 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 	return &mod, nil
 }
 
-func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan error) {
+func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequencerAddress string, l1HeadNum uint64, errCh chan error) {
 	if !s.finishedNewPayload {
-		errCh <- errors.New("transactions are not ready to be processed yet")
+		errCh <- errors.New("to finalize, you need to wait for the new payload")
 		return
 	}
 
 	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
 	message := FinalizeBlockMessageParams{
-		Platform:            s.platform,
-		RollupId:            s.rollupId,
-		ExecutorAddress:     s.executorAddress,
-		PlatformBlockHeight: l1HeadNum,
-		RollupBlockHeight:   targetNum,
+		Platform:                s.platform,
+		RollupId:                s.rollupId,
+		ExecutorAddress:         s.executorAddress,
+		NextBlockCreatorAddress: nextSequencerAddress,
+		BlockCreatorAddress:     sequencerAddress,
+		PlatformBlockHeight:     l1HeadNum,
+		RollupBlockHeight:       targetNum,
 	}
 	params := FinalizeBlockParams{
 		Message:   message,
@@ -311,7 +315,7 @@ func (s *SbbService) finalizeBlock(url string, l1HeadNum uint64, errCh chan erro
 	defer cancel()
 
 	if err := s.sbbClient.Send(ctx, url, body, nil); err != nil {
-		log.Error("failed to send finalize_block request to SBB")
+		log.Error("failed to send finalize_block request to SBB", "error", err.Error())
 		errCh <- err
 		return
 	}
@@ -333,13 +337,13 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 	txs, err := s.getRawTransactionList(reqCtx, url, blockNum)
 	if err != nil {
 		// Error Wrapping 적용해보기.
-		log.Error("failed to fetch transactions from SBB")
+		log.Error("failed to fetch transactions from SBB", "error", err.Error())
 		errCh <- err
 		return
 	}
 	if len(txs) > 0 {
 		if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
-			log.Error("failed to add the transactions to the transaction pool")
+			log.Error("failed to add the transactions to the transaction pool", "error", err.Error())
 			errCh <- err
 			return
 		}
@@ -357,10 +361,9 @@ func (s *SbbService) getRawTransactionList(ctx context.Context, url string, bloc
 	body := newJsonRpcRequest(GetRawTransactionList, params)
 	res := &GetRawTransactionsResponse{}
 	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
-		log.Error("failed to send get_transaction_list request to SBB")
+		log.Error("failed to send get_transaction_list request to SBB", "error", err.Error())
 		return nil, err
 	}
-
 	var txs []*types.Transaction
 	for _, hexString := range res.RawTransactions {
 		tx, _ := hexToTx(hexString)
@@ -426,11 +429,13 @@ type GetSequencerRpcUrlsResponse struct {
 }
 
 type FinalizeBlockMessageParams struct {
-	Platform            string `json:"platform"`
-	RollupId            string `json:"rollup_id"`
-	ExecutorAddress     string `json:"executor_address"`
-	PlatformBlockHeight uint64 `json:"platform_block_height"`
-	RollupBlockHeight   uint64 `json:"rollup_block_height"`
+	Platform                string `json:"platform"`
+	RollupId                string `json:"rollup_id"`
+	ExecutorAddress         string `json:"executor_address"`
+	BlockCreatorAddress     string `json:"block_creator_address"`
+	NextBlockCreatorAddress string `json:"next_block_creator_address"`
+	PlatformBlockHeight     uint64 `json:"platform_block_height"`
+	RollupBlockHeight       uint64 `json:"rollup_block_height"`
 }
 
 type FinalizeBlockParams struct {

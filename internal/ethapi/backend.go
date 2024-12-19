@@ -121,12 +121,16 @@ func GetAPIs(apiBackend Backend, useSequencingMode bool) []rpc.API {
 		}, {
 			Namespace: "personal",
 			Service:   NewPersonalAccountAPI(apiBackend, nonceLock),
+		}, {
+			Namespace: "eth",
+			Service:   NewTransactionAPI(apiBackend, nonceLock),
 		},
 	}
+
 	if !useSequencingMode {
 		apis = append(apis, rpc.API{
 			Namespace: "eth",
-			Service:   NewTransactionAPI(apiBackend, nonceLock),
+			Service:   NewTransactionSubmissionAPI(apiBackend, nonceLock),
 		})
 	}
 	return apis

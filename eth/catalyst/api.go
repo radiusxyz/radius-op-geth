@@ -569,6 +569,7 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
 
 	sbbService := api.eth.SbbService()
+	//fmt.Println("sync: ", sbbService.IsSyncCompleted(), " txsSet: ", sbbService.FinishedTxsSetting(), " newPay: ", sbbService.FinishedNewPayload())
 	if sbbService != nil && sbbService.IsSyncCompleted() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
 		log.Error("failed to get the payload because the transaction pool is not ready yet.")
 		return nil, engine.GenericServerError

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -66,8 +67,10 @@ func (sc *SbbClient) Send(ctx context.Context, url string, body interface{}, res
 	if err = json.Unmarshal(resBody, &jsonRpcResponse); err != nil {
 		return err
 	}
-
-	if jsonRpcResponse.Result != nil {
+	if jsonRpcResponse.Error != nil {
+		return errors.New(jsonRpcResponse.Error.Message)
+	}
+	if jsonRpcResponse.Result != nil && result != nil {
 		if err = json.Unmarshal(jsonRpcResponse.Result, result); err != nil {
 			return err
 		}
