@@ -193,6 +193,7 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 		log.Error("failed to fetch l1 head number", "error", err.Error())
 		return nil, err
 	}
+	l1HeadNum -= 3 // SBB가 아직 최신 블록을 가져오지 안았을 수도 있기 때문에 안정성을 위해 -3
 	return &l1HeadNum, nil
 }
 
@@ -289,11 +290,12 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 
 func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequencerAddress string, l1HeadNum uint64, errCh chan error) {
 	if !s.finishedNewPayload {
-		errCh <- errors.New("to finalize, you need to wait for the new payload")
+		log.Warn("to finalize, you need to wait for the new payload")
+		//errCh <- errors.New("to finalize, you need to wait for the new payload")
 		return
 	}
 
-	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
+	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2 - 1 // - 1을 왜 해야하는지는 알아봐야됨
 	message := FinalizeBlockMessageParams{
 		Platform:                s.platform,
 		RollupId:                s.rollupId,
@@ -326,14 +328,15 @@ func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequ
 
 func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
 	if s.finishedTxsSetting {
-		errCh <- errors.New("transactions are not ready to be processed yet")
+		log.Warn("the transactions are already set up")
+		//errCh <- errors.New("the transactions are already set up")
 		return
 	}
 
 	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer reqCancel()
 
-	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1
+	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨
 	txs, err := s.getRawTransactionList(reqCtx, url, blockNum)
 	if err != nil {
 		// Error Wrapping 적용해보기.
