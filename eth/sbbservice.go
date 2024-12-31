@@ -185,7 +185,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 }
 
 func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
-	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
 	l1HeadNum, err := s.ethClient.BlockNumber(reqCtx)
@@ -193,10 +193,11 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 		log.Error("failed to fetch l1 head number", "error", err.Error())
 		return nil, err
 	}
-	l1HeadNum -= 3 // SBB가 아직 최신 블록을 가져오지 안았을 수도 있기 때문에 안정성을 위해 -3
+	l1HeadNum -= 3 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 -3
 	return &l1HeadNum, nil
 }
 
+// index, urls, addresses, error
 func (s *SbbService) getSequencer(ctx context.Context, l1HeadNum uint64) (*string, *string, *string, error) {
 	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
 	if err != nil {
@@ -218,7 +219,7 @@ func (s *SbbService) getSequencer(ctx context.Context, l1HeadNum uint64) (*strin
 }
 
 func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
-	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
 	contractABI, err := abi.JSON(strings.NewReader(abiString))
@@ -264,7 +265,7 @@ func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []s
 
 	body := newJsonRpcRequest(GetSequencerRpcUrlList, params)
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
 	res := &GetSequencerRpcUrlsResponse{}
@@ -313,7 +314,7 @@ func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequ
 	body := newJsonRpcRequest(FinalizeBlock, params)
 
 	//0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	if err := s.sbbClient.Send(ctx, url, body, nil); err != nil {
@@ -333,7 +334,7 @@ func (s *SbbService) processTransactions(ctx context.Context, url string, errCh 
 		return
 	}
 
-	reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
 	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨

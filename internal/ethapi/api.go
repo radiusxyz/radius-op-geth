@@ -2323,11 +2323,11 @@ type TransactionSubmissionAPI struct {
 	signer    types.Signer
 }
 
-func NewTransactionSubmissionAPI(b Backend, nonceLock *AddrLocker) *TransactionAPI {
+func NewTransactionSubmissionAPI(b Backend, nonceLock *AddrLocker) *TransactionSubmissionAPI {
 	// The signer used by the API should always be the 'latest' known one because we expect
 	// signers to be backwards-compatible with old transactions.
 	signer := types.LatestSigner(b.ChainConfig())
-	return &TransactionAPI{b, nonceLock, signer}
+	return &TransactionSubmissionAPI{b, nonceLock, signer}
 }
 
 // SendRawTransaction will add the signed transaction to the transaction pool.
