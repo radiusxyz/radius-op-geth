@@ -34,19 +34,27 @@ type BlockchainService interface {
 }
 
 type SbbService struct {
-	blockchainService       BlockchainService
-	sbbClient               *sbbclient.SbbClient
-	ethClient               *ethclient.Client
-	platform                string
-	rollupId                string
-	executorAddress         string
-	livenessContractAddress string
-	clusterId               string
-	seedNodeUrl             string
-	finishedTxsSetting      bool
-	finishedNewPayload      bool
-	noTxPool                bool
-	syncTime                uint64
+	blockchainService               BlockchainService
+	sbbClient                       *sbbclient.SbbClient
+	ethClient                       *ethclient.Client
+	platform                        string
+	rollupId                        string
+	executorAddress                 string
+	livenessContractAddress         string
+	clusterId                       string
+	seedNodeUrl                     string
+	finishedTxsSetting              bool
+	finishedNewPayload              bool
+	noTxPool                        bool
+	syncMode                        bool
+	syncTime                        uint64
+	sequencerUrls                   []string
+	sequencerAddresses              []string
+	sequencerIndex                  uint64
+	hasBlockFinalizeRefused         bool
+	hasGetRawTransactionListRefused bool
+	currentFinalizedBlockNumber     uint64
+	currentTxsSettingBlockNumber    uint64
 }
 
 func NewSbbService(eth *Ethereum) (*SbbService, error) {
@@ -56,19 +64,27 @@ func NewSbbService(eth *Ethereum) (*SbbService, error) {
 		return nil, err
 	}
 	return &SbbService{
-		blockchainService:       eth,
-		sbbClient:               sbbClient,
-		ethClient:               ethClient,
-		platform:                eth.config.Platform,
-		rollupId:                eth.config.RollupId,
-		executorAddress:         eth.config.ExecutorAddress,
-		livenessContractAddress: eth.config.LivenessContractAddress,
-		clusterId:               eth.config.ClusterId,
-		seedNodeUrl:             eth.config.SeedNodeUrl,
-		finishedTxsSetting:      false,
-		finishedNewPayload:      true,
-		noTxPool:                true,
-		syncTime:                0,
+		blockchainService:               eth,
+		sbbClient:                       sbbClient,
+		ethClient:                       ethClient,
+		platform:                        eth.config.Platform,
+		rollupId:                        eth.config.RollupId,
+		executorAddress:                 eth.config.ExecutorAddress,
+		livenessContractAddress:         eth.config.LivenessContractAddress,
+		clusterId:                       eth.config.ClusterId,
+		seedNodeUrl:                     eth.config.SeedNodeUrl,
+		finishedTxsSetting:              false,
+		finishedNewPayload:              true,
+		noTxPool:                        true,
+		syncMode:                        true,
+		syncTime:                        0,
+		sequencerUrls:                   make([]string, 0, 10),
+		sequencerAddresses:              make([]string, 0, 10),
+		sequencerIndex:                  0,
+		hasBlockFinalizeRefused:         false,
+		hasGetRawTransactionListRefused: false,
+		currentFinalizedBlockNumber:     1000000000,
+		currentTxsSettingBlockNumber:    1000000000,
 	}, nil
 }
 
@@ -89,12 +105,18 @@ func (s *SbbService) SetNoTxPool(flag bool) {
 	s.noTxPool = flag
 }
 
-func (s *SbbService) FinishedTxsSetting() bool {
-	return s.finishedTxsSetting
-}
+func (s *SbbService) FinishedTxsSetting() bool { return s.finishedTxsSetting }
 
-func (s *SbbService) FinishedNewPayload() bool {
-	return s.finishedNewPayload
+func (s *SbbService) FinishedNewPayload() bool { return s.finishedNewPayload }
+
+func (s *SbbService) CurrentFinalizedBlockBlockNumber() uint64 { return s.currentFinalizedBlockNumber }
+
+func (s *SbbService) CurrentTxsSettingBlockNumber() uint64 { return s.currentTxsSettingBlockNumber }
+
+func (s *SbbService) SyncMode() bool { return s.syncMode }
+
+func (s *SbbService) SetSyncMode(flag bool) {
+	s.syncMode = flag
 }
 
 func (s *SbbService) ResetFinishedTxsSetting() {
@@ -113,9 +135,51 @@ func (s *SbbService) CompleteTxsSetting() {
 	s.finishedTxsSetting = true
 }
 
+func (s *SbbService) getNextSequencerIndex(index uint64) (*uint64, error) {
+	length := len(s.sequencerUrls)
+	if length < 1 {
+		return nil, errors.New("cannot divide by zero")
+	}
+	nextIndex := (index + 1) % uint64(length)
+	return &nextIndex, nil
+}
+
+func (s *SbbService) increaseSequencerIndex() error {
+	length := len(s.sequencerUrls)
+	if length < 1 {
+		return errors.New("cannot divide by zero")
+	}
+	s.sequencerIndex = (s.sequencerIndex + 1) % uint64(length)
+	return nil
+}
+
+func (s *SbbService) hasSBBRefused() bool {
+	if s.hasBlockFinalizeRefused || s.hasGetRawTransactionListRefused {
+		return true
+	}
+	return false
+}
+
 func (s *SbbService) Start() {
 	log.Info("Starting sbb service...")
 	s.eventLoop()
+}
+
+func (s *SbbService) process(ctx context.Context, l1HeadNum uint64) error {
+	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
+		if err := s.processTransactions(ctx); err != nil {
+			fmt.Println("txxxX: ", s.currentTxsSettingBlockNumber, " ffffi: ", s.currentFinalizedBlockNumber)
+			return err
+		}
+	}
+
+	if !s.IsSyncCompleted() && !(!s.finishedTxsSetting && s.currentFinalizedBlockNumber == s.currentTxsSettingBlockNumber) {
+		return fmt.Errorf("싱크모드라서 파이널라이즈 할 수 없어 %d  now: %d", int64(s.syncTime), time.Now().Unix())
+	}
+	if err := s.finalizeBlock(l1HeadNum); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SbbService) eventLoop() ethereum.Subscription {
@@ -132,10 +196,11 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			}
 		}()
 
-		errCh := make(chan error, 1)
+		//errCh := make(chan error, 1)
 
 		for {
-			if s.IsSyncCompleted() {
+			fmt.Println("ssssS: ", s.syncMode)
+			if !s.syncMode {
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -146,12 +211,13 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			return err
 		}
 
-		url, sequencerAddress, nextSequencerAddress, err := s.getSequencer(eventsCtx, *l1HeadNum)
-		if err != nil {
+		if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
+			return err
+		}
+		if err = s.finalizeBlock(*l1HeadNum); err != nil {
 			return err
 		}
 
-		s.finalizeBlock(*url, *sequencerAddress, *nextSequencerAddress, *l1HeadNum, errCh)
 		fmt.Println(log.Yellow + "First Finalize")
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -167,18 +233,21 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 					log.Error("failed to fetch l1 head", "error", err.Error())
 					continue
 				}
-				url, sequencerAddress, nextSequencerAddress, err = s.getSequencer(eventsCtx, *l1HeadNum)
-				if err != nil {
-					log.Error("failed to fetch sequencer url", "error", err.Error())
-					continue
+				if !s.hasSBBRefused() {
+					if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
+						log.Error("failed to fetch sequencer info", "error", err.Error())
+						continue
+					}
+				} else {
+					if err = s.increaseSequencerIndex(); err != nil {
+						return err
+					}
 				}
-				go s.processTransactions(eventsCtx, *url, errCh)
-				go s.finalizeBlock(*url, *sequencerAddress, *nextSequencerAddress, *l1HeadNum, errCh)
+				if err = s.process(eventsCtx, *l1HeadNum); err != nil {
+					fmt.Println(log.Blue+"something error: ", err.Error())
+				}
 			case <-eventsCtx.Done():
 				return nil
-			case err, _ := <-errCh:
-				fmt.Println(log.Blue+"something error: ", err.Error())
-				// 나중에 0.5초만에 다시 요청하게 하던 스케줄 조정
 			}
 		}
 	})
@@ -198,24 +267,27 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 }
 
 // index, urls, addresses, error
-func (s *SbbService) getSequencer(ctx context.Context, l1HeadNum uint64) (*string, *string, *string, error) {
+func (s *SbbService) setSequencerInfo(ctx context.Context, l1HeadNum uint64) error {
 	addresses, err := s.fetchSequencerAddressList(ctx, l1HeadNum)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	urls, err := s.fetchSequencerRpcUrlList(ctx, addresses)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
 	index, err := s.getSequencerIndex(urls)
 	if err != nil {
-		return nil, nil, nil, err
+		return err
 	}
 
-	nextIndex := (*index + 1) % uint64(len(urls))
-	return &urls[*index], &addresses[*index], &addresses[nextIndex], nil
+	s.sequencerAddresses = addresses
+	s.sequencerUrls = urls
+	s.sequencerIndex = *index
+	//nextIndex := (*index + 1) % uint64(len(urls))
+	return nil
 }
 
 func (s *SbbService) fetchSequencerAddressList(ctx context.Context, l1HeadNum uint64) ([]string, error) {
@@ -289,20 +361,24 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 	return &mod, nil
 }
 
-func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequencerAddress string, l1HeadNum uint64, errCh chan error) {
+func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 	if !s.finishedNewPayload {
-		log.Warn("to finalize, you need to wait for the new payload")
-		//errCh <- errors.New("to finalize, you need to wait for the new payload")
-		return
+		return errors.New("to finalize, you need to wait for the new payload")
 	}
 
-	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2 - 1 // - 1을 왜 해야하는지는 알아봐야됨
+	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2 // - 1을 왜 해야하는지는 알아봐야됨 다시지움
+
+	nextSequencerIndex, err := s.getNextSequencerIndex(s.sequencerIndex)
+	if err != nil {
+		return err
+	}
+
 	message := FinalizeBlockMessageParams{
 		Platform:                s.platform,
 		RollupId:                s.rollupId,
 		ExecutorAddress:         s.executorAddress,
-		NextBlockCreatorAddress: nextSequencerAddress,
-		BlockCreatorAddress:     sequencerAddress,
+		NextBlockCreatorAddress: s.sequencerAddresses[*nextSequencerIndex],
+		BlockCreatorAddress:     s.sequencerAddresses[s.sequencerIndex],
 		PlatformBlockHeight:     l1HeadNum,
 		RollupBlockHeight:       targetNum,
 	}
@@ -317,57 +393,66 @@ func (s *SbbService) finalizeBlock(url string, sequencerAddress string, nextSequ
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := s.sbbClient.Send(ctx, url, body, nil); err != nil {
-		log.Error("failed to send finalize_block request to SBB", "error", err.Error())
-		errCh <- err
-		return
+	if err = s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, nil); err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			s.hasBlockFinalizeRefused = true
+			return fmt.Errorf("request finalize_block refused: %s", err.Error())
+		}
+		return fmt.Errorf("failed to send finalize_block request to SBB: %s", err.Error())
 	}
+
+	s.hasBlockFinalizeRefused = false
 	s.ResetFinishedNewPayload()
+	s.currentFinalizedBlockNumber = targetNum
 
 	fmt.Println(log.Blue+"Successfully finalized the contents to be included in the block. ", "block num: ", targetNum)
+	return nil
 }
 
-func (s *SbbService) processTransactions(ctx context.Context, url string, errCh chan error) {
+func (s *SbbService) processTransactions(ctx context.Context) error {
 	if s.finishedTxsSetting {
-		log.Warn("the transactions are already set up")
-		//errCh <- errors.New("the transactions are already set up")
-		return
+		return errors.New("the transactions are already set up")
 	}
 
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
-	blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨
-	txs, err := s.getRawTransactionList(reqCtx, url, blockNum)
+	//blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨
+	blockNum := s.CurrentFinalizedBlockBlockNumber()
+	txs, err := s.getRawTransactionList(reqCtx, blockNum)
 	if err != nil {
-		// Error Wrapping 적용해보기.
-		log.Error("failed to fetch transactions from SBB", "error", err.Error())
-		errCh <- err
-		return
+		return fmt.Errorf("failed to fetch transactions from SBB: %s", err.Error())
 	}
 	if len(txs) > 0 {
 		if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
-			log.Error("failed to add the transactions to the transaction pool", "error", err.Error())
-			errCh <- err
-			return
+			return fmt.Errorf("failed to add the transactions to the transaction pool: %s", err.Error())
 		}
 	}
 	s.CompleteTxsSetting()
+	s.currentTxsSettingBlockNumber = blockNum
 
 	fmt.Println(log.Blue+"Transaction processing succeeded.", "tx count: ", len(txs), " block num: ", blockNum)
+	return nil
 }
 
-func (s *SbbService) getRawTransactionList(ctx context.Context, url string, blockNum uint64) (types.Transactions, error) {
+func (s *SbbService) getRawTransactionList(ctx context.Context, blockNum uint64) (types.Transactions, error) {
 	params := GetRawTransactionsParams{
 		RollupId:          s.rollupId,
 		RollupBlockHeight: blockNum,
 	}
 	body := newJsonRpcRequest(GetRawTransactionList, params)
 	res := &GetRawTransactionsResponse{}
-	if err := s.sbbClient.Send(ctx, url, body, res); err != nil {
-		log.Error("failed to send get_transaction_list request to SBB", "error", err.Error())
+	if err := s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, res); err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			log.Error("Request get_transaction_list refused", "error", err.Error())
+			s.hasGetRawTransactionListRefused = true
+		} else {
+			log.Error("failed to send get_transaction_list request to SBB", "error", err.Error())
+		}
 		return nil, err
 	}
+	s.hasGetRawTransactionListRefused = false
+
 	var txs []*types.Transaction
 	for _, hexString := range res.RawTransactions {
 		tx, _ := hexToTx(hexString)
