@@ -168,13 +168,14 @@ func (s *SbbService) Start() {
 func (s *SbbService) process(ctx context.Context, l1HeadNum uint64) error {
 	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
 		if err := s.processTransactions(ctx); err != nil {
-			fmt.Println("txxxX: ", s.currentTxsSettingBlockNumber, " ffffi: ", s.currentFinalizedBlockNumber)
+			// 이 부분에 성공할 때까지 무한 요청 로직 추가 예정
 			return err
 		}
 	}
 
 	if !s.IsSyncCompleted() && !(!s.finishedTxsSetting && s.currentFinalizedBlockNumber == s.currentTxsSettingBlockNumber) {
-		return fmt.Errorf("싱크모드라서 파이널라이즈 할 수 없어 %d  now: %d", int64(s.syncTime), time.Now().Unix())
+		log.Warn("prevents finalizing the next block in sync mode to ensure sync mode execution remains possible")
+		return nil
 	}
 	if err := s.finalizeBlock(l1HeadNum); err != nil {
 		return err
@@ -262,7 +263,7 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 		log.Error("failed to fetch l1 head number", "error", err.Error())
 		return nil, err
 	}
-	l1HeadNum -= 3 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 -3
+	l1HeadNum -= 5 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 -5
 	return &l1HeadNum, nil
 }
 
@@ -398,7 +399,7 @@ func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 			s.hasBlockFinalizeRefused = true
 			return fmt.Errorf("request finalize_block refused: %s", err.Error())
 		}
-		return fmt.Errorf("failed to send finalize_block request to SBB: %s", err.Error())
+		return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight)
 	}
 
 	s.hasBlockFinalizeRefused = false
@@ -447,7 +448,7 @@ func (s *SbbService) getRawTransactionList(ctx context.Context, blockNum uint64)
 			log.Error("Request get_transaction_list refused", "error", err.Error())
 			s.hasGetRawTransactionListRefused = true
 		} else {
-			log.Error("failed to send get_transaction_list request to SBB", "error", err.Error())
+			log.Error("failed to send get_transaction_list request to SBB", "error", err.Error(), "height", params.RollupBlockHeight)
 		}
 		return nil, err
 	}

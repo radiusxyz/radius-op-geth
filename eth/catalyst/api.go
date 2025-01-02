@@ -568,13 +568,6 @@ func (api *ConsensusAPI) GetPayloadV4(payloadID engine.PayloadID) (*engine.Execu
 func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*engine.ExecutionPayloadEnvelope, error) {
 	log.Trace("Engine API request received", "method", "GetPayload", "id", payloadID)
 
-	//sbbService := api.eth.SbbService()
-	////fmt.Println("sync: ", sbbService.IsSyncCompleted(), " txsSet: ", sbbService.FinishedTxsSetting(), " newPay: ", sbbService.FinishedNewPayload())
-	//if sbbService != nil && sbbService.IsSyncCompleted() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-	//	log.Error("failed to get the payload because the transaction pool is not ready yet.")
-	//	return nil, engine.GenericServerError
-	//}
-
 	sbbService := api.eth.SbbService()
 	if sbbService != nil {
 		sbbService.SetSyncMode(!sbbService.IsSyncCompleted())
@@ -593,31 +586,15 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 			}
 		} else {
 			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Error("failed to get the payload because the transaction pool is not ready yet.")
+				log.Error("failed to get the payload because the transaction pool is not ready yet2.")
 				return nil, engine.GenericServerError
 			}
 		}
 	}
-	//if !sbbService.SyncMode() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-	//	log.Error("failed to get the payload because the transaction pool is not ready yet.")
-	//	return nil, engine.GenericServerError
-	//}
 
 	if sbbService != nil {
 		fmt.Println("current final: ", sbbService.CurrentFinalizedBlockBlockNumber(), " get num: ", data.ExecutionPayload.Number, " FinishedTxsSetting: ", sbbService.FinishedTxsSetting(), " FinishedNewPayload: ", sbbService.FinishedNewPayload(), " NoTxpool: ", sbbService.NoTxPool())
 	}
-	//sbbService.CurrentFinalizedBlockBlockNumber() > data.ExecutionPayload.Number 이 조건 넣었었음
-	//if sbbService != nil && sbbService.SyncMode() && (sbbService.FinishedTxsSetting() /*|| sbbService.CurrentFinalizedBlockBlockNumber() == sbbService.CurrentTxsSettingBlockNumber()+1*/) {
-	//	log.Error("getPayload - waiting for the finalized block to be confirmed")
-	//	return nil, engine.GenericServerError
-	//}
-
-	//if sbbService != nil && sbbService.SyncMode() && sbbService.FinishedTxsSetting() {
-	//	log.Error("getPayload - waiting for the finalized block to be confirmed")
-	//	return nil, engine.GenericServerError //이걸 여니까 거의 되긴 했었음. 특수처리를 하든 해보자
-	//}
-
-	//fmt.Println("FinishedTxsSetting: ", sbbService.FinishedTxsSetting(), " FinishedNewPayload: ", sbbService.FinishedNewPayload())
 	if sbbService != nil {
 		fmt.Println(log.Blue+"Engine API Get Num: ", data.ExecutionPayload.Number, " Block Timestamp: ", data.ExecutionPayload.Timestamp, "Now: ", time.Now().UnixMilli())
 	}
@@ -914,16 +891,11 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 			}
 		} else {
 			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Error("failed to create the payload because the transaction pool is not ready yet.")
+				log.Error("failed to create the payload because the transaction pool is not ready yet2.")
 				return api.invalid(engine.GenericServerError, nil), nil
 			}
 		}
 	}
-
-	//if sbbService != nil && sbbService.SyncMode() && sbbService.FinishedTxsSetting() {
-	//	log.Error("newPayload - waiting for the finalized block to be confirmed")
-	//	return api.invalid(engine.GenericServerError, nil), nil //이걸 여니까 거의 되긴 했었음. 특수처리를 하든 해보자
-	//}
 
 	// Payload must have eip-1559 params in ExtraData after Holocene
 	if api.eth.BlockChain().Config().IsHolocene(params.Timestamp) {
