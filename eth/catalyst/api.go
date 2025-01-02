@@ -581,20 +581,16 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 	if sbbService != nil {
 		if sbbService.SyncMode() {
 			if sbbService.CurrentFinalizedBlockBlockNumber() == data.ExecutionPayload.Number && sbbService.CurrentTxsSettingBlockNumber() != data.ExecutionPayload.Number {
-				log.Warn("failed to get the payload because the transaction pool is not ready yet.")
+				log.Warn("failed to get the payload because the transaction pool is not ready yet. 1")
 				return nil, engine.GenericServerError
 			}
-		} else {
-			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Warn("failed to get the payload because the transaction pool is not ready yet2.")
-				return nil, engine.GenericServerError
-			}
+		} else if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
+			log.Warn("failed to get the payload because the transaction pool is not ready yet. 2")
+			return nil, engine.GenericServerError
 		}
+
 	}
 
-	if sbbService != nil {
-		fmt.Println("current final: ", sbbService.CurrentFinalizedBlockBlockNumber(), " get num: ", data.ExecutionPayload.Number, " FinishedTxsSetting: ", sbbService.FinishedTxsSetting(), " FinishedNewPayload: ", sbbService.FinishedNewPayload(), " NoTxpool: ", sbbService.NoTxPool())
-	}
 	if sbbService != nil {
 		fmt.Println(log.Blue+"Engine API Get Num: ", data.ExecutionPayload.Number, " Block Timestamp: ", data.ExecutionPayload.Timestamp, "Now: ", time.Now().UnixMilli())
 	}
@@ -878,22 +874,15 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	// check whether we already have the block locally.
 
 	sbbService := api.eth.SbbService()
-	if sbbService != nil && !sbbService.SyncMode() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-		log.Warn("failed to create the payload because the transaction pool is not ready yet.")
-		return api.invalid(engine.GenericServerError, nil), nil
-	}
-
 	if sbbService != nil {
 		if sbbService.SyncMode() {
 			if sbbService.CurrentFinalizedBlockBlockNumber() == params.Number && sbbService.CurrentTxsSettingBlockNumber() != params.Number {
-				log.Warn("failed to create the payload because the transaction pool is not ready yet.")
+				log.Warn("failed to create the payload because the transaction pool is not ready yet. 1")
 				return api.invalid(engine.GenericServerError, nil), nil
 			}
-		} else {
-			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Warn("failed to create the payload because the transaction pool is not ready yet2.")
-				return api.invalid(engine.GenericServerError, nil), nil
-			}
+		} else if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
+			log.Warn("failed to create the payload because the transaction pool is not ready yet. 2")
+			return api.invalid(engine.GenericServerError, nil), nil
 		}
 	}
 
