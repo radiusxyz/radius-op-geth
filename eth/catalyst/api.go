@@ -581,12 +581,12 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 	if sbbService != nil {
 		if sbbService.SyncMode() {
 			if sbbService.CurrentFinalizedBlockBlockNumber() == data.ExecutionPayload.Number && sbbService.CurrentTxsSettingBlockNumber() != data.ExecutionPayload.Number {
-				log.Error("failed to get the payload because the transaction pool is not ready yet.")
+				log.Warn("failed to get the payload because the transaction pool is not ready yet.")
 				return nil, engine.GenericServerError
 			}
 		} else {
 			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Error("failed to get the payload because the transaction pool is not ready yet2.")
+				log.Warn("failed to get the payload because the transaction pool is not ready yet2.")
 				return nil, engine.GenericServerError
 			}
 		}
@@ -879,19 +879,19 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 
 	sbbService := api.eth.SbbService()
 	if sbbService != nil && !sbbService.SyncMode() && !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-		log.Error("failed to create the payload because the transaction pool is not ready yet.")
+		log.Warn("failed to create the payload because the transaction pool is not ready yet.")
 		return api.invalid(engine.GenericServerError, nil), nil
 	}
 
 	if sbbService != nil {
 		if sbbService.SyncMode() {
 			if sbbService.CurrentFinalizedBlockBlockNumber() == params.Number && sbbService.CurrentTxsSettingBlockNumber() != params.Number {
-				log.Error("failed to create the payload because the transaction pool is not ready yet.")
+				log.Warn("failed to create the payload because the transaction pool is not ready yet.")
 				return api.invalid(engine.GenericServerError, nil), nil
 			}
 		} else {
 			if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-				log.Error("failed to create the payload because the transaction pool is not ready yet2.")
+				log.Warn("failed to create the payload because the transaction pool is not ready yet2.")
 				return api.invalid(engine.GenericServerError, nil), nil
 			}
 		}

@@ -197,10 +197,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			}
 		}()
 
-		//errCh := make(chan error, 1)
-
 		for {
-			fmt.Println("ssssS: ", s.syncMode)
 			if !s.syncMode {
 				break
 			}
