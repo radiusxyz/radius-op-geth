@@ -213,7 +213,26 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			return err
 		}
 		if err = s.finalizeBlock(*l1HeadNum); err != nil {
-			return err
+			if s.hasBlockFinalizeRefused {
+				log.Warn("failed to initial finalizing due to no sequencer found. retrying with a different sequencer")
+				for i := 0; i < len(s.sequencerUrls); i++ {
+					if err = s.increaseSequencerIndex(); err != nil {
+						return err
+					}
+					if err = s.finalizeBlock(*l1HeadNum); err != nil {
+						if !s.hasBlockFinalizeRefused {
+							return err
+						}
+					} else {
+						break
+					}
+				}
+				if s.hasBlockFinalizeRefused {
+					panic("no sequencer")
+				}
+			} else {
+				return err
+			}
 		}
 
 		fmt.Println(log.Yellow + "First Finalize")
@@ -242,7 +261,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 					}
 				}
 				if err = s.process(eventsCtx, *l1HeadNum); err != nil {
-					fmt.Println(log.Blue+"something error: ", err.Error())
+					fmt.Println(log.Red+"something error: ", err.Error())
 				}
 			case <-eventsCtx.Done():
 				return nil
