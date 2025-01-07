@@ -92,13 +92,22 @@ func (s *SbbService) NoTxPool() bool {
 	return s.noTxPool
 }
 
+func (s *SbbService) SetSyncMode(flag bool) {
+	s.syncMode = flag
+}
+
+func (s *SbbService) SyncMode() bool {
+	return s.syncMode
+}
+
 func (s *SbbService) SetSyncTime(t uint64) {
 	s.syncTime = t
 }
 
 func (s *SbbService) IsSyncCompleted() bool {
+	return s.syncTime > uint64(time.Now().Unix())
 	//fmt.Println("btime: ", s.syncTime, " now: ", uint64(time.Now().Unix()), s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix()))
-	return s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix())
+	//return s.syncTime <= uint64(time.Now().Unix())+2 && s.syncTime > uint64(time.Now().Unix())
 }
 
 func (s *SbbService) SetNoTxPool(flag bool) {
@@ -112,12 +121,6 @@ func (s *SbbService) FinishedNewPayload() bool { return s.finishedNewPayload }
 func (s *SbbService) CurrentFinalizedBlockBlockNumber() uint64 { return s.currentFinalizedBlockNumber }
 
 func (s *SbbService) CurrentTxsSettingBlockNumber() uint64 { return s.currentTxsSettingBlockNumber }
-
-func (s *SbbService) SyncMode() bool { return s.syncMode }
-
-func (s *SbbService) SetSyncMode(flag bool) {
-	s.syncMode = flag
-}
 
 func (s *SbbService) ResetFinishedTxsSetting() {
 	s.finishedTxsSetting = false
@@ -166,17 +169,34 @@ func (s *SbbService) Start() {
 }
 
 func (s *SbbService) process(ctx context.Context, l1HeadNum uint64) error {
-	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
+	fmt.Println("cfb: ", s.currentFinalizedBlockNumber, " ctb: ", s.currentTxsSettingBlockNumber, " future: ", s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1, " now: ", time.Now().UnixMilli())
+	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 &&
+		s.currentTxsSettingBlockNumber != s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
 		if err := s.processTransactions(ctx); err != nil {
-			// 이 부분에 성공할 때까지 무한 요청 로직 추가 예정
 			return err
 		}
 	}
 
-	if !s.IsSyncCompleted() && !(!s.finishedTxsSetting && s.currentFinalizedBlockNumber == s.currentTxsSettingBlockNumber) {
-		log.Warn("prevents finalizing the next block in sync mode to ensure sync mode execution remains possible")
-		return nil
+	if !s.hasSBBRefused() {
+		if err := s.setSequencerInfo(ctx, l1HeadNum); err != nil {
+			return errors.New("failed to update sequencer info")
+		}
 	}
+
+	// 이게 현재까지 잘 되는 확실한 거
+	if !s.IsSyncCompleted() && !(!s.finishedTxsSetting && s.currentFinalizedBlockNumber == s.currentTxsSettingBlockNumber) {
+		return fmt.Errorf("prevents finalizing the next block in sync mode to ensure sync mode execution remains possible. now %d", time.Now().UnixMilli())
+	}
+
+	//시험1
+	//if !s.IsSyncCompleted() {
+	//	return errors.New("cannot request finalize_block in sync mode")
+	//}
+	//시험2
+	//if s.syncMode {
+	//	return errors.New("cannot request finalize_block in sync mode")
+	//}
+
 	if err := s.finalizeBlock(l1HeadNum); err != nil {
 		return err
 	}
@@ -198,7 +218,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 		}()
 
 		for {
-			if !s.syncMode {
+			if s.IsSyncCompleted() {
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -215,10 +235,13 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 
 		for i := 0; i < len(s.sequencerUrls); i++ {
 			if err = s.finalizeBlock(*l1HeadNum); err != nil {
-				if s.hasBlockFinalizeRefused {
+				if strings.Contains(err.Error(), "connection refused") {
 					log.Warn("failed to initial finalizing due to no sequencer found. retrying with a different sequencer")
 					if err = s.increaseSequencerIndex(); err != nil {
 						return err
+					}
+					if i == len(s.sequencerUrls)-1 {
+						panic("no sequencer")
 					}
 					continue
 				}
@@ -226,38 +249,74 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 			}
 			break
 		}
-		if s.hasBlockFinalizeRefused {
-			panic("no sequencer")
-		}
 
 		fmt.Println(log.Yellow + "First Finalize")
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
+		delay := 2 * time.Second
+		timer := time.NewTimer(delay)
+		var timerCh <-chan time.Time
+		timerCh = timer.C
+		LOOPTIME := int64(2000)
+		//ticker := time.NewTicker(2 * time.Second)
+		//defer ticker.Stop()
 		for {
 			select {
-			case <-ticker.C:
+			case <-timerCh:
+				startTime := time.Now().UnixMilli()
+				delay = 2 * time.Second
 				if s.noTxPool {
 					continue
 				}
 				l1HeadNum, err = s.fetchL1HeadNum(eventsCtx)
 				if err != nil {
 					log.Error("failed to fetch l1 head", "error", err.Error())
+					timer.Reset(500 * time.Millisecond)
 					continue
 				}
-				if !s.hasSBBRefused() {
-					if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
-						log.Error("failed to fetch sequencer info", "error", err.Error())
-						continue
+
+				//if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
+				//	log.Error("failed to fetch sequencer info", "error", err.Error())
+				//	continue
+				//}
+
+				for i := 0; i < len(s.sequencerUrls); i++ {
+					if err = s.process(eventsCtx, *l1HeadNum); err != nil {
+						if strings.Contains(err.Error(), "connection refused") {
+							log.Warn("failed to processing due to no sequencer found. retrying with a different sequencer", "error", err.Error(), " url: ", s.sequencerUrls[s.sequencerIndex])
+							if i == len(s.sequencerUrls)-1 {
+								panic("no sequencer")
+							}
+							if err = s.increaseSequencerIndex(); err != nil {
+								return err
+							}
+							continue
+						}
+						delay = 500 * time.Millisecond // 페이로드 생성한 시간 받아서 시간 계산해보든지 아니면 이것도 듀레이션으로 계산해서 해보자.
+						fmt.Println(log.Yellow+"something soft error: ", err.Error(), " i:", i)
 					}
+					break
+				}
+				timer.Reset(delay)
+				endTime := time.Now().UnixMilli()
+				duration := endTime - startTime
+				if LOOPTIME-duration > 0 {
+					timer.Reset(time.Duration(LOOPTIME-duration) * time.Millisecond)
 				} else {
-					if err = s.increaseSequencerIndex(); err != nil {
-						return err
-					}
+					timer.Reset(0)
 				}
-				if err = s.process(eventsCtx, *l1HeadNum); err != nil {
-					fmt.Println(log.Red+"something error: ", err.Error())
-				}
+				fmt.Println("startTime: ", startTime, " endTime: ", endTime, "duration: ", endTime-startTime)
+				//if !s.hasSBBRefused() {
+				//	if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
+				//		log.Error("failed to fetch sequencer info", "error", err.Error())
+				//		continue
+				//	}
+				//} else {
+				//	if err = s.increaseSequencerIndex(); err != nil {
+				//		return err
+				//	}
+				//}
+				//if err = s.process(eventsCtx, *l1HeadNum); err != nil {
+				//	fmt.Println(log.Red+"something error: ", err.Error())
+				//}
 			case <-eventsCtx.Done():
 				return nil
 			}
@@ -274,7 +333,7 @@ func (s *SbbService) fetchL1HeadNum(ctx context.Context) (*uint64, error) {
 		log.Error("failed to fetch l1 head number", "error", err.Error())
 		return nil, err
 	}
-	l1HeadNum -= 5 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 -5
+	l1HeadNum -= 6 // SBB가 아직 최신 블록을 가져오지 않았을 수도 있기 때문에 안정성을 위해 마진 -6
 	return &l1HeadNum, nil
 }
 
@@ -346,7 +405,6 @@ func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []s
 	params := GetSequencerRpcUrlsParams{
 		SequencerAddresses: addresses,
 	}
-
 	body := newJsonRpcRequest(GetSequencerRpcUrlList, params)
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -359,7 +417,9 @@ func (s *SbbService) fetchSequencerRpcUrlList(ctx context.Context, addresses []s
 	}
 	var urls []string
 	for _, sequencer := range res.SequencerRrcUrls {
-		urls = append(urls, sequencer.ClusterRpcUrl)
+		if sequencer.ClusterRpcUrl != "" {
+			urls = append(urls, sequencer.ClusterRpcUrl)
+		}
 	}
 	return urls, nil
 }
@@ -374,8 +434,8 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 }
 
 func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
-	if !s.finishedNewPayload {
-		return errors.New("to finalize, you need to wait for the new payload")
+	if !s.finishedNewPayload || s.currentTxsSettingBlockNumber != s.currentFinalizedBlockNumber {
+		return errors.New("to finalize, you need to wait for the new payload or txs setting")
 	}
 
 	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2 // - 1을 왜 해야하는지는 알아봐야됨 다시지움
@@ -408,16 +468,16 @@ func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 	if err = s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, nil); err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			s.hasBlockFinalizeRefused = true
-			return fmt.Errorf("request finalize_block refused: %s", err.Error())
+			return err
 		}
-		return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight)
+		return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, s.sequencerUrls[s.sequencerIndex], time.Now().UnixMilli())
 	}
 
 	s.hasBlockFinalizeRefused = false
 	s.ResetFinishedNewPayload()
 	s.currentFinalizedBlockNumber = targetNum
 
-	fmt.Println(log.Blue+"Successfully finalized the contents to be included in the block. ", "block num: ", targetNum)
+	fmt.Println(log.Blue+"Successfully finalized the contents to be included in the block. ", "block num: ", targetNum, " now: ", time.Now().UnixMilli())
 	return nil
 }
 
@@ -433,7 +493,7 @@ func (s *SbbService) processTransactions(ctx context.Context) error {
 	blockNum := s.CurrentFinalizedBlockBlockNumber()
 	txs, err := s.getRawTransactionList(reqCtx, blockNum)
 	if err != nil {
-		return fmt.Errorf("failed to fetch transactions from SBB: %s", err.Error())
+		return err
 	}
 	if len(txs) > 0 {
 		if err = s.blockchainService.SubmitRawTransactions(txs); err != nil {
@@ -443,7 +503,7 @@ func (s *SbbService) processTransactions(ctx context.Context) error {
 	s.CompleteTxsSetting()
 	s.currentTxsSettingBlockNumber = blockNum
 
-	fmt.Println(log.Blue+"Transaction processing succeeded.", "tx count: ", len(txs), " block num: ", blockNum)
+	fmt.Println(log.Blue+"Transaction processing succeeded.", "tx count: ", len(txs), " block num: ", blockNum, " now: ", time.Now().UnixMilli())
 	return nil
 }
 
@@ -456,10 +516,9 @@ func (s *SbbService) getRawTransactionList(ctx context.Context, blockNum uint64)
 	res := &GetRawTransactionsResponse{}
 	if err := s.sbbClient.Send(ctx, s.sequencerUrls[s.sequencerIndex], body, res); err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
-			log.Error("Request get_transaction_list refused", "error", err.Error())
 			s.hasGetRawTransactionListRefused = true
 		} else {
-			log.Error("failed to send get_transaction_list request to SBB", "error", err.Error(), "height", params.RollupBlockHeight)
+			return nil, fmt.Errorf("failed to send get_raw_transaction_list request to SBB: %s height %d url %s now %d", err.Error(), params.RollupBlockHeight, s.sequencerUrls[s.sequencerIndex], time.Now().UnixMilli())
 		}
 		return nil, err
 	}
