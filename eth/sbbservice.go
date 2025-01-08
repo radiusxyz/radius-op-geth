@@ -278,6 +278,7 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 				//	continue
 				//}
 
+				noErr := true
 				for i := 0; i < len(s.sequencerUrls); i++ {
 					if err = s.process(eventsCtx, *l1HeadNum); err != nil {
 						if strings.Contains(err.Error(), "connection refused") {
@@ -290,20 +291,27 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 							}
 							continue
 						}
-						delay = 500 * time.Millisecond // 페이로드 생성한 시간 받아서 시간 계산해보든지 아니면 이것도 듀레이션으로 계산해서 해보자.
+						//delay = 500 * time.Millisecond // 페이로드 생성한 시간 받아서 시간 계산해보든지 아니면 이것도 듀레이션으로 계산해서 해보자.
 						fmt.Println(log.Yellow+"something soft error: ", err.Error(), " i:", i)
+						timer.Reset(0)
+						noErr = false
+						if strings.Contains(err.Error(), "NoneType") {
+							panic("NoneType 이놈!!")
+						}
+						break
 					}
 					break
 				}
-				timer.Reset(delay)
-				endTime := time.Now().UnixMilli()
-				duration := endTime - startTime
-				if LOOPTIME-duration > 0 {
-					timer.Reset(time.Duration(LOOPTIME-duration) * time.Millisecond)
-				} else {
-					timer.Reset(0)
+				if noErr {
+					endTime := time.Now().UnixMilli()
+					duration := endTime - startTime
+					if LOOPTIME-duration > 0 {
+						timer.Reset(time.Duration(LOOPTIME-duration) * time.Millisecond)
+					} else {
+						timer.Reset(0)
+					}
+					fmt.Println("startTime: ", startTime, " endTime: ", endTime, "duration: ", endTime-startTime)
 				}
-				fmt.Println("startTime: ", startTime, " endTime: ", endTime, "duration: ", endTime-startTime)
 				//if !s.hasSBBRefused() {
 				//	if err = s.setSequencerInfo(eventsCtx, *l1HeadNum); err != nil {
 				//		log.Error("failed to fetch sequencer info", "error", err.Error())
