@@ -172,6 +172,7 @@ func (s *SbbService) process(ctx context.Context, l1HeadNum uint64) error {
 	fmt.Println("cfb: ", s.currentFinalizedBlockNumber, " ctb: ", s.currentTxsSettingBlockNumber, " future: ", s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1, " now: ", time.Now().UnixMilli())
 	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 &&
 		s.currentTxsSettingBlockNumber != s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
+		fmt.Println(log.Blue + "processing transactions")
 		if err := s.processTransactions(ctx); err != nil {
 			return err
 		}
@@ -285,7 +286,6 @@ func (s *SbbService) eventLoop() ethereum.Subscription {
 							}
 							continue
 						}
-						//delay = 500 * time.Millisecond // 페이로드 생성한 시간 받아서 시간 계산해보든지 아니면 이것도 듀레이션으로 계산해서 해보자.
 						fmt.Println(log.Yellow+"something soft error: ", err.Error(), " i:", i)
 						timer.Reset(0)
 						if strings.Contains(err.Error(), "NoneType") {
@@ -419,12 +419,17 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 }
 
 func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
-	if !s.finishedNewPayload || s.currentTxsSettingBlockNumber != s.currentFinalizedBlockNumber {
+	if /*!s.finishedNewPayload ||*/ s.currentTxsSettingBlockNumber != s.currentFinalizedBlockNumber {
 		return errors.New("to finalize, you need to wait for the new payload or txs setting")
 	}
 
-	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2 // - 1을 왜 해야하는지는 알아봐야됨 다시지움
-
+	//offset := 2
+	//if s.currentTxsSettingBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() &&
+	//	s.currentTxsSettingBlockNumber == s.currentFinalizedBlockNumber {
+	//	offset = 1
+	//}
+	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
+	fmt.Println("kym syncTime: ", s.syncTime, "now: ", time.Now().Unix())
 	nextSequencerIndex, err := s.getNextSequencerIndex(s.sequencerIndex)
 	if err != nil {
 		return err
@@ -475,7 +480,7 @@ func (s *SbbService) processTransactions(ctx context.Context) error {
 	defer reqCancel()
 
 	//blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨
-	blockNum := s.CurrentFinalizedBlockBlockNumber()
+	blockNum := s.currentFinalizedBlockNumber
 	txs, err := s.getRawTransactionList(reqCtx, blockNum)
 	if err != nil {
 		return err

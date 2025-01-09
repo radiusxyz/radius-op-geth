@@ -578,11 +578,11 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 		sbbService.SetSyncMode(!sbbService.IsSyncCompleted())
 		if sbbService.SyncMode() {
 			if sbbService.CurrentFinalizedBlockBlockNumber() == data.ExecutionPayload.Number && sbbService.CurrentTxsSettingBlockNumber() != data.ExecutionPayload.Number {
-				log.Warn("failed to proceed with synchronization: block finalized and transactions not ready")
+				log.Warn("failed to proceed with synchronization: block finalized and transactions not ready", "block num", data.ExecutionPayload.Number)
 				return nil, engine.GenericServerError
 			}
-		} else if !sbbService.NoTxPool() && (!sbbService.FinishedTxsSetting() || sbbService.FinishedNewPayload()) {
-			log.Warn("failed to get the payload because the transaction pool is not ready yet")
+		} else if !sbbService.NoTxPool() && !sbbService.FinishedTxsSetting() && data.ExecutionPayload.Number == sbbService.CurrentFinalizedBlockBlockNumber() {
+			log.Warn("failed to get the payload because the transaction pool is not ready yet", "block num", data.ExecutionPayload.Number)
 			return nil, engine.GenericServerError
 		}
 		fmt.Println(log.Blue+"Engine API Get Num: ", data.ExecutionPayload.Number, " Block Timestamp: ", data.ExecutionPayload.Timestamp, "Now: ", time.Now().UnixMilli())
