@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -34,6 +35,7 @@ type BlockchainService interface {
 }
 
 type SbbService struct {
+	Mutex                           sync.Mutex
 	blockchainService               BlockchainService
 	sbbClient                       *sbbclient.SbbClient
 	ethClient                       *ethclient.Client
@@ -55,6 +57,7 @@ type SbbService struct {
 	hasGetRawTransactionListRefused bool
 	currentFinalizedBlockNumber     uint64
 	currentTxsSettingBlockNumber    uint64
+	nextFinalizingBlockNumber       uint64
 }
 
 func NewSbbService(eth *Ethereum) (*SbbService, error) {
@@ -85,6 +88,7 @@ func NewSbbService(eth *Ethereum) (*SbbService, error) {
 		hasGetRawTransactionListRefused: false,
 		currentFinalizedBlockNumber:     1000000000,
 		currentTxsSettingBlockNumber:    1000000000,
+		nextFinalizingBlockNumber:       0,
 	}, nil
 }
 
@@ -121,6 +125,10 @@ func (s *SbbService) FinishedNewPayload() bool { return s.finishedNewPayload }
 func (s *SbbService) CurrentFinalizedBlockBlockNumber() uint64 { return s.currentFinalizedBlockNumber }
 
 func (s *SbbService) CurrentTxsSettingBlockNumber() uint64 { return s.currentTxsSettingBlockNumber }
+
+func (s *SbbService) NextFinalizingBlockNumber() uint64 {
+	return s.nextFinalizingBlockNumber
+}
 
 func (s *SbbService) ResetFinishedTxsSetting() {
 	s.finishedTxsSetting = false
@@ -169,10 +177,10 @@ func (s *SbbService) Start() {
 }
 
 func (s *SbbService) process(ctx context.Context, l1HeadNum uint64) error {
-	fmt.Println("cfb: ", s.currentFinalizedBlockNumber, " ctb: ", s.currentTxsSettingBlockNumber, " future: ", s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1, " now: ", time.Now().UnixMilli())
+	fmt.Println(log.Reset+"cfb: ", s.currentFinalizedBlockNumber, " ctb: ", s.currentTxsSettingBlockNumber, " future: ", s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1, " now: ", time.Now().UnixMilli())
 	if s.currentFinalizedBlockNumber == s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 &&
 		s.currentTxsSettingBlockNumber != s.blockchainService.BlockChain().CurrentBlock().Number.Uint64()+1 {
-		fmt.Println(log.Blue + "processing transactions")
+		fmt.Println(log.Reset + "processing transactions")
 		if err := s.processTransactions(ctx); err != nil {
 			return err
 		}
@@ -342,7 +350,6 @@ func (s *SbbService) setSequencerInfo(ctx context.Context, l1HeadNum uint64) err
 	s.sequencerAddresses = addresses
 	s.sequencerUrls = urls
 	s.sequencerIndex = *index
-	//nextIndex := (*index + 1) % uint64(len(urls))
 	return nil
 }
 
@@ -419,6 +426,9 @@ func (s *SbbService) getSequencerIndex(urls []string) (*uint64, error) {
 }
 
 func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
 	if /*!s.finishedNewPayload ||*/ s.currentTxsSettingBlockNumber != s.currentFinalizedBlockNumber {
 		return errors.New("to finalize, you need to wait for the new payload or txs setting")
 	}
@@ -428,8 +438,13 @@ func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 	//	s.currentTxsSettingBlockNumber == s.currentFinalizedBlockNumber {
 	//	offset = 1
 	//}
-	targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
-	fmt.Println("kym syncTime: ", s.syncTime, "now: ", time.Now().Unix())
+
+	//targetNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
+	targetNum := s.nextFinalizingBlockNumber
+	if targetNum == 0 {
+		targetNum = s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 2
+	}
+
 	nextSequencerIndex, err := s.getNextSequencerIndex(s.sequencerIndex)
 	if err != nil {
 		return err
@@ -463,6 +478,12 @@ func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 		return fmt.Errorf("failed to send finalize_block request to SBB: %s request params: platformHeight %d rollupHeight %d url %s now %d", err.Error(), message.PlatformBlockHeight, message.RollupBlockHeight, s.sequencerUrls[s.sequencerIndex], time.Now().UnixMilli())
 	}
 
+	gap := time.Now().Unix() - int64(s.syncTime)
+	if gap < 0 {
+		s.nextFinalizingBlockNumber = targetNum + 1
+	} else {
+		s.nextFinalizingBlockNumber = targetNum + uint64(gap/2+2)
+	}
 	s.hasBlockFinalizeRefused = false
 	s.ResetFinishedNewPayload()
 	s.currentFinalizedBlockNumber = targetNum
@@ -472,6 +493,9 @@ func (s *SbbService) finalizeBlock(l1HeadNum uint64) error {
 }
 
 func (s *SbbService) processTransactions(ctx context.Context) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
 	if s.finishedTxsSetting {
 		return errors.New("the transactions are already set up")
 	}
@@ -479,7 +503,6 @@ func (s *SbbService) processTransactions(ctx context.Context) error {
 	reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer reqCancel()
 
-	//blockNum := s.blockchainService.BlockChain().CurrentBlock().Number.Uint64() + 1 - 1 // - 1을 왜 해야하는지는 알아봐야됨
 	blockNum := s.currentFinalizedBlockNumber
 	txs, err := s.getRawTransactionList(reqCtx, blockNum)
 	if err != nil {

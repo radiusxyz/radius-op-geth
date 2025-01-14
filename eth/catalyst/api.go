@@ -575,13 +575,22 @@ func (api *ConsensusAPI) getPayload(payloadID engine.PayloadID, full bool) (*eng
 
 	sbbService := api.eth.SbbService()
 	if sbbService != nil {
+		sbbService.Mutex.Lock()
+		defer sbbService.Mutex.Unlock()
 		sbbService.SetSyncMode(!sbbService.IsSyncCompleted())
+		if data.ExecutionPayload.Number == sbbService.NextFinalizingBlockNumber() {
+			log.Warn("failed to proceed as it is the next scheduled block for confirmation", "block num", data.ExecutionPayload.Number)
+			return nil, engine.GenericServerError
+		}
+
 		if sbbService.SyncMode() {
-			if sbbService.CurrentFinalizedBlockBlockNumber() == data.ExecutionPayload.Number && sbbService.CurrentTxsSettingBlockNumber() != data.ExecutionPayload.Number {
+			if sbbService.CurrentFinalizedBlockBlockNumber() == data.ExecutionPayload.Number &&
+				sbbService.CurrentTxsSettingBlockNumber() != data.ExecutionPayload.Number {
 				log.Warn("failed to proceed with synchronization: block finalized and transactions not ready", "block num", data.ExecutionPayload.Number)
 				return nil, engine.GenericServerError
 			}
-		} else if !sbbService.NoTxPool() && !sbbService.FinishedTxsSetting() && data.ExecutionPayload.Number == sbbService.CurrentFinalizedBlockBlockNumber() {
+		} else if !sbbService.NoTxPool() && !sbbService.FinishedTxsSetting() &&
+			data.ExecutionPayload.Number == sbbService.CurrentFinalizedBlockBlockNumber() {
 			log.Warn("failed to get the payload because the transaction pool is not ready yet", "block num", data.ExecutionPayload.Number)
 			return nil, engine.GenericServerError
 		}
